@@ -2,6 +2,8 @@ export interface Stats {
   capital: number;
   initialCapital: number;
   realizedProfit: number;
+  grossProfit: number;
+  totalFees: number;
   totalTrades: number;
   winningTrades: number;
   losingTrades: number;
@@ -25,13 +27,19 @@ export interface Trade {
   spread: number;
   size: number;
   expectedProfit: number;
+  grossProfit: number;
+  fee: number;
   actualProfit: number;
   netProfit: number;
   status: 'completed' | 'failed' | 'pending';
 }
 
 export interface Config {
+  mode: 'test' | 'real';
   initialCapital: number;
+  apiKey: string;
+  apiSecret: string;
+  exchangeFee: number;
   minSpread: number;
   tradeSizePercent: number;
   maxTradesPerHour: number;
@@ -59,4 +67,12 @@ export interface SimulationParams {
   speed: number;
   duration: number;
   initialCapital: number;
+}
+
+export interface RealTradingStatus {
+  connected: boolean;
+  balance: number;
+  balanceCurrency: string;
+  lastOrderId: string | null;
+  error: string | null;
 }
