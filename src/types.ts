@@ -31,6 +31,7 @@ export interface Trade {
 }
 
 export interface Config {
+  initialCapital: number;
   minSpread: number;
   tradeSizePercent: number;
   maxTradesPerHour: number;
