@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Play, Pause, RotateCcw, TrendingUp, Activity, DollarSign, BarChart3, AlertTriangle } from 'lucide-react';
 import { Trade, Stats, Config } from './types';
 import { useSimulation } from './hooks/useSimulation';
@@ -49,6 +49,9 @@ function App() {
   const [logs, setLogs] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'trades' | 'config' | 'logs'>('dashboard');
   const [simulationSpeed, setSimulationSpeed] = useState<number>(1);
+  const [elapsed, setElapsed] = useState<number>(0);
+  const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const startTimeRef = useRef<number>(0);
   
   const { marketData, volatility } = useMarketData();
   const {
@@ -72,8 +75,13 @@ function App() {
   const handleStart = () => {
     if (stats.isRunning) {
       pauseSimulation();
+      if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
       addLog('Simulation paused');
     } else {
+      startTimeRef.current = Date.now() - elapsed * 1000;
+      elapsedRef.current = setInterval(() => {
+        setElapsed(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }, 1000);
       startSimulation(simulationSpeed);
       addLog(`Simulation started (speed: ${simulationSpeed}x)`);
     }
@@ -81,6 +89,8 @@ function App() {
 
   const handleReset = () => {
     resetSimulation();
+    if (elapsedRef.current) { clearInterval(elapsedRef.current); elapsedRef.current = null; }
+    setElapsed(0);
     setLogs([]);
     addLog('Simulation reset');
   };
@@ -227,6 +237,10 @@ function App() {
                   <RotateCcw className="w-5 h-5" />
                   RESET
                 </button>
+
+                <span className="font-mono text-sm text-slate-400">
+                  {String(Math.floor(elapsed / 3600)).padStart(2, '0')}:{String(Math.floor((elapsed % 3600) / 60)).padStart(2, '0')}:{String(elapsed % 60).padStart(2, '0')}
+                </span>
 
                 <div className="flex items-center gap-2 ml-auto">
                   <span className="text-sm text-slate-400">Speed:</span>
