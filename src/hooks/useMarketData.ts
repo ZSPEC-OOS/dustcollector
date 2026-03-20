@@ -5,13 +5,14 @@ const PAIRS = [
   { symbol: 'BTC',  stream: 'btcusdt'  },
   { symbol: 'ETH',  stream: 'ethusdt'  },
   { symbol: 'SOL',  stream: 'solusdt'  },
-  { symbol: 'AR',   stream: 'arusdt'   },
+  { symbol: 'BNB',  stream: 'bnbusdt'  },
   { symbol: 'ADA',  stream: 'adausdt'  },
   { symbol: 'DOT',  stream: 'dotusdt'  },
   { symbol: 'LINK', stream: 'linkusdt' },
-  { symbol: 'POL',  stream: 'polusdt'  }, // formerly MATIC
+  { symbol: 'AR',   stream: 'arusdt'   },
 ];
 
+const BASE = 'https://api.binance.com/api/v3';
 
 const INITIAL: MarketData[] = PAIRS.map(p => ({
   symbol: p.symbol,
@@ -24,64 +25,54 @@ const INITIAL: MarketData[] = PAIRS.map(p => ({
   connected: false,
 }));
 
-async function fetchRestFallback(): Promise<MarketData[]> {
-  const [tickerRes, bookRes] = await Promise.all([
-    fetch(`https://api.binance.com/api/v3/ticker/24hr?symbols=${encodeURIComponent(JSON.stringify(PAIRS.map(p => p.stream.toUpperCase())))}`),
-    fetch(`https://api.binance.com/api/v3/ticker/bookTicker?symbols=${encodeURIComponent(JSON.stringify(PAIRS.map(p => p.stream.toUpperCase())))}`),
+async function fetchOnePair(p: typeof PAIRS[0]): Promise<MarketData> {
+  const sym = p.stream.toUpperCase();
+  const [t24, book] = await Promise.all([
+    fetch(`${BASE}/ticker/24hr?symbol=${sym}`).then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch(`${BASE}/ticker/bookTicker?symbol=${sym}`).then(r => r.ok ? r.json() : null).catch(() => null),
   ]);
-  const tickers: Record<string, { lastPrice: string; priceChangePercent: string }> = {};
-  const books:   Record<string, { bidPrice: string; askPrice: string }> = {};
+  const bid = book ? parseFloat(book.bidPrice) : 0;
+  const ask = book ? parseFloat(book.askPrice) : 0;
+  return {
+    symbol: p.symbol,
+    stream: p.stream,
+    price:      t24  ? parseFloat(t24.lastPrice)          : 0,
+    change:     t24  ? parseFloat(t24.priceChangePercent) : 0,
+    bid,
+    ask,
+    volatility: bid > 0 ? ((ask - bid) / bid) * 100 : 0,
+    connected:  !!(t24 && book),
+  };
+}
 
-  if (tickerRes.ok) {
-    const arr = await tickerRes.json() as { symbol: string; lastPrice: string; priceChangePercent: string }[];
-    arr.forEach(t => { tickers[t.symbol] = t; });
-  }
-  if (bookRes.ok) {
-    const arr = await bookRes.json() as { symbol: string; bidPrice: string; askPrice: string }[];
-    arr.forEach(b => { books[b.symbol] = b; });
-  }
-
-  return PAIRS.map(p => {
-    const sym = p.stream.toUpperCase();
-    const t = tickers[sym];
-    const bk = books[sym];
-    const bid = bk ? parseFloat(bk.bidPrice) : 0;
-    const ask = bk ? parseFloat(bk.askPrice) : 0;
-    const spreadPct = bid > 0 ? ((ask - bid) / bid) * 100 : 0;
-    return {
-      symbol: p.symbol,
-      stream: p.stream,
-      price:  t  ? parseFloat(t.lastPrice)           : 0,
-      change: t  ? parseFloat(t.priceChangePercent)  : 0,
-      bid,
-      ask,
-      volatility: spreadPct,
-      connected:  !!(t && bk),
-    };
-  });
+async function fetchAllRest(): Promise<MarketData[]> {
+  const results = await Promise.allSettled(PAIRS.map(fetchOnePair));
+  return results.map((r, i) =>
+    r.status === 'fulfilled' ? r.value : { ...INITIAL[i] }
+  );
 }
 
 export function useMarketData() {
   const [marketData, setMarketData] = useState<MarketData[]>(INITIAL);
   const [volatility, setVolatility] = useState(0);
-  const wsRef          = useRef<WebSocket | null>(null);
-  const reconnectRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pollRef        = useRef<ReturnType<typeof setInterval> | null>(null);
-  const wsConnected    = useRef(false);
+  const wsRef        = useRef<WebSocket | null>(null);
+  const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollRef      = useRef<ReturnType<typeof setInterval> | null>(null);
+  const wsLive       = useRef(false);
 
-  // REST polling fallback
+  const applyData = (data: MarketData[]) => {
+    setMarketData(data);
+    const avg = data.filter(d => d.connected).reduce((s, d) => s + d.volatility, 0) / (data.filter(d => d.connected).length || 1);
+    setVolatility(avg);
+  };
+
   const startPolling = () => {
     if (pollRef.current) return;
-    pollRef.current = setInterval(async () => {
-      try {
-        const data = await fetchRestFallback();
-        setMarketData(data);
-        const avgSpread = data.reduce((s, d) => s + d.volatility, 0) / data.length;
-        setVolatility(avgSpread);
-      } catch {
-        // silent — will retry next interval
-      }
-    }, 3000);
+    // immediate fetch, then every 4 s
+    fetchAllRest().then(applyData).catch(() => {});
+    pollRef.current = setInterval(() => {
+      fetchAllRest().then(applyData).catch(() => {});
+    }, 4000);
   };
 
   const stopPolling = () => {
@@ -89,33 +80,25 @@ export function useMarketData() {
   };
 
   useEffect(() => {
+    // Always start REST polling immediately so data is never blank
+    startPolling();
+
     const streams = PAIRS.map(p => `${p.stream}@ticker`).join('/');
     const url = `wss://stream.binance.com:9443/stream?streams=${streams}`;
-
-    // Immediately fetch via REST so there's data while WS connects
-    fetchRestFallback().then(data => {
-      setMarketData(data);
-    }).catch(() => {});
 
     const connect = () => {
       if (wsRef.current) wsRef.current.close();
       const ws = new WebSocket(url);
       wsRef.current = ws;
 
-      // If WS doesn't open within 6 s, start polling
-      const openTimeout = setTimeout(() => {
-        if (!wsConnected.current) startPolling();
-      }, 6000);
-
       ws.onopen = () => {
-        wsConnected.current = true;
-        clearTimeout(openTimeout);
-        stopPolling();
+        wsLive.current = true;
+        stopPolling(); // WS takes over
         setMarketData(prev => prev.map(m => ({ ...m, connected: true })));
       };
 
-      ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
         const d = msg.data;
         if (!d) return;
         const pair = PAIRS.find(p => d.s && p.stream === d.s.toLowerCase());
@@ -127,27 +110,20 @@ export function useMarketData() {
         const spreadPct = bid > 0 ? ((ask - bid) / bid) * 100 : 0;
 
         setMarketData(prev => prev.map(m =>
-          m.symbol !== pair.symbol ? m : {
-            ...m, price, change: parseFloat(d.P), volatility: spreadPct, bid, ask, connected: true,
-          }
+          m.symbol !== pair.symbol ? m : { ...m, price, change: parseFloat(d.P), volatility: spreadPct, bid, ask, connected: true }
         ));
         setVolatility(prev => prev * 0.95 + spreadPct * 0.05);
       };
 
-      ws.onerror = () => {
-        clearTimeout(openTimeout);
-        ws.close();
-      };
-
-      ws.onclose = () => {
-        wsConnected.current = false;
-        clearTimeout(openTimeout);
+      ws.onerror  = () => ws.close();
+      ws.onclose  = () => {
+        wsLive.current = false;
         setMarketData(prev => prev.map(m => ({ ...m, connected: false })));
-        startPolling();
+        startPolling(); // fall back to REST while WS reconnects
         reconnectRef.current = setTimeout(() => {
           stopPolling();
           connect();
-        }, 8000);
+        }, 10000);
       };
     };
 
