@@ -51,7 +51,6 @@ function App() {
   
   const { marketData, volatility } = useMarketData();
   const {
-    simulationState,
     startSimulation,
     pauseSimulation,
     resetSimulation,
