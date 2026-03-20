@@ -3,7 +3,7 @@ import { Play, Pause, RotateCcw, TrendingUp, Activity, DollarSign, BarChart3, Al
 import { Trade, Stats, Config } from './types';
 import { useSimulation } from './hooks/useSimulation';
 import { useMarketData } from './hooks/useMarketData';
-import { formatCurrency, formatPercentage } from './utils/formatters';
+import { formatCurrency, formatCurrencyDetailed, formatPercentage } from './utils/formatters';
 import { StatCard } from './components/StatCard';
 import { TradeRow } from './components/TradeRow';
 import { ConfigPanel } from './components/ConfigPanel';
@@ -12,6 +12,7 @@ import { SimulationChart } from './components/SimulationChart';
 import { LogConsole } from './components/LogConsole';
 
 const DEFAULT_CONFIG: Config = {
+  initialCapital: 1.00,
   minSpread: 0.07,
   tradeSizePercent: 80,
   maxTradesPerHour: 60,
@@ -88,6 +89,21 @@ function App() {
     const updated = { ...config, ...newConfig };
     setConfig(updated);
     updateConfig(updated);
+    if (newConfig.initialCapital !== undefined) {
+      setStats(prev => ({
+        ...prev,
+        capital: newConfig.initialCapital!,
+        initialCapital: newConfig.initialCapital!,
+        realizedProfit: 0,
+        totalTrades: 0,
+        winningTrades: 0,
+        losingTrades: 0,
+        winRate: 0,
+        tradesToday: 0,
+        dailyProfit: 0,
+        dailyLoss: 0,
+      }));
+    }
     addLog(`Config updated: ${JSON.stringify(newConfig)}`);
   };
 
@@ -167,7 +183,7 @@ function App() {
               />
               <StatCard
                 title="Total Profit"
-                value={formatCurrency(stats.realizedProfit)}
+                value={formatCurrencyDetailed(stats.realizedProfit)}
                 subvalue={`${formatPercentage((stats.realizedProfit / stats.initialCapital) * 100)} ROI`}
                 trend="up"
                 icon={TrendingUp}

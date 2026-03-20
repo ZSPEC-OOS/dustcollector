@@ -30,6 +30,22 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate }) =>
 
       <div className="space-y-6">
         <div>
+          <label className="block text-sm font-medium text-slate-300 mb-2">Starting Capital</label>
+          <div className="flex items-center gap-2 bg-slate-800 rounded-lg p-4">
+            <span className="text-cyan-400 font-mono">$</span>
+            <input
+              type="number"
+              min={0.00001}
+              step={0.01}
+              value={config.initialCapital}
+              onChange={(e) => onUpdate({ initialCapital: Math.max(0.00001, Number(e.target.value)) })}
+              className="bg-transparent flex-1 text-cyan-400 font-mono text-sm focus:outline-none"
+            />
+          </div>
+          <p className="text-xs text-slate-500 mt-1">Changing this resets the simulation</p>
+        </div>
+
+        <div>
           <label className="block text-sm font-medium text-slate-300 mb-3">Trading Strategy</label>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {strategies.map(strat => (
