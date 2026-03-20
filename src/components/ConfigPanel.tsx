@@ -585,7 +585,7 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
           </div>
 
           <div className="space-y-4">
-            <ConfigSlider label="Minimum Spread Threshold" value={config.minSpread} min={0.02} max={0.30} step={0.01} unit="%" onChange={(v) => onUpdate({ minSpread: v })} description="Minimum real bid/ask spread required to attempt a trade" />
+            <ConfigSlider label="Minimum Spread Threshold" value={config.minSpread} min={0.02} max={2.00} step={0.01} unit="%" onChange={(v) => onUpdate({ minSpread: v })} description="Minimum real bid/ask spread required to attempt a trade (realistic tri-arb needs >0.30% to clear 3-leg fees)" />
             {!config.swarmMode && (
               <ConfigSlider label="Trade Size (single-bot mode)" value={config.tradeSizePercent} min={50} max={95} step={5} unit="%" onChange={(v) => onUpdate({ tradeSizePercent: v })} description="Percentage of capital used per trade (swarm mode uses bot size × count instead)" />
             )}
