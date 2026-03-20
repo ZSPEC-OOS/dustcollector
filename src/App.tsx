@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Play, Pause, RotateCcw, TrendingUp, Activity, DollarSign, BarChart3, AlertTriangle, Zap, Receipt } from 'lucide-react';
+import { Play, Pause, RotateCcw, TrendingUp, Activity, DollarSign, BarChart3, AlertTriangle, Zap, Receipt, Target } from 'lucide-react';
 import { Trade, Stats, Config } from './types';
 import { useSimulation } from './hooks/useSimulation';
 import { useMarketData } from './hooks/useMarketData';
@@ -14,18 +14,22 @@ import { LogConsole } from './components/LogConsole';
 
 const DEFAULT_CONFIG: Config = {
   mode: 'test',
-  initialCapital: 1.00,
+  initialCapital: 200,      // $200 — matches the swarm scenario
   apiKey: '',
   apiSecret: '',
-  exchangeFee: 0.025,   // maker fee with BNB — realistic for limit-order HFT
-  minSpread: 0.08,      // min opportunity; must exceed round-trip fee to profit
-  tradeSizePercent: 80,
-  maxTradesPerHour: 120,
-  cooldownSeconds: 30,
+  exchangeFee: 0.025,       // maker fee with BNB — realistic for limit-order HFT
+  minSpread: 0.08,          // min opportunity; must exceed round-trip fee to profit
+  tradeSizePercent: 80,     // used in single-bot mode only
+  maxTradesPerHour: 360,    // headroom for swarm bursts (6 attacks/min × 60)
+  cooldownSeconds: 15,      // 15s between swarm attacks — ~4 attacks/min max
   strategy: 'adaptive',
-  enablePredictive: true,
+  enablePredictive: false,
   batchSize: 5,
-  riskLevel: 'medium',
+  riskLevel: 'medium',      // 10% daily loss limit = $20 stop
+  // Swarm mode defaults: 18 bots × $10 = $180 (90% of $200)
+  swarmMode: true,
+  swarmBotCount: 18,        // 18 bots — Binance $10 minimum × 18 = $180
+  swarmBotSize: 10,         // $10/bot — Binance spot minimum notional
 };
 
 const makeInitialStats = (capital: number): Stats => ({
@@ -47,6 +51,11 @@ const makeInitialStats = (capital: number): Stats => ({
   pauseReason: null,
   lastTradeTime: 0,
   currentRegime: 'normal',
+  totalSwarms: 0,
+  lastSwarmWins: 0,
+  lastSwarmTotal: 0,
+  swarmBotsWon: 0,
+  swarmBotsLost: 0,
 });
 
 function App() {
@@ -75,6 +84,9 @@ function App() {
   useEffect(() => {
     addLog('Dust Collector v2.0 initialized');
     addLog(`Mode: ${config.mode.toUpperCase()} | Exchange fee: ${config.exchangeFee}% per side`);
+    if (config.swarmMode) {
+      addLog(`Swarm Mode: ${config.swarmBotCount} bots × $${config.swarmBotSize} = $${config.swarmBotCount * config.swarmBotSize} per attack`);
+    }
     addLog('Binance WebSocket feed connected');
   }, []);
 
@@ -147,7 +159,7 @@ function App() {
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
             <div>
               <h1 className="text-3xl md:text-4xl font-bold text-cyan-400 tracking-tight">◈ DUST COLLECTOR</h1>
-              <p className="text-slate-500 text-sm mt-1">Ultra-HF Micro-Arbitrage // {isReal ? 'LIVE TRADING' : 'Test Mode'}</p>
+              <p className="text-slate-500 text-sm mt-1">Ultra-HF Micro-Arbitrage // {isReal ? 'LIVE TRADING' : 'Test Mode'}{config.swarmMode ? ` // SWARM ${config.swarmBotCount}×$${config.swarmBotSize}` : ''}</p>
             </div>
             <div className="flex items-center gap-3">
               {isReal ? (
@@ -265,6 +277,58 @@ function App() {
                 </div>
               </div>
             </div>
+
+            {/* Swarm dashboard */}
+            {config.swarmMode && (
+              <div className="bg-slate-900 border border-yellow-500/30 rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-4">
+                  <Target className="w-4 h-4 text-yellow-400" />
+                  <h3 className="text-sm font-medium text-yellow-400 uppercase tracking-wider">Swarm Intelligence</h3>
+                  <span className="ml-auto text-xs text-slate-500">{config.swarmBotCount} bots × ${config.swarmBotSize} = ${config.swarmBotCount * config.swarmBotSize} deployed per attack</span>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="bg-slate-800 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">Swarm Attacks</div>
+                    <div className="font-mono font-bold text-yellow-400 text-lg">{stats.totalSwarms}</div>
+                    <div className="text-xs text-slate-600 mt-1">total fired</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">Last Swarm</div>
+                    <div className="font-mono font-bold text-lg">
+                      <span className="text-green-400">{stats.lastSwarmWins}</span>
+                      <span className="text-slate-600 text-sm"> / </span>
+                      <span className="text-slate-300">{stats.lastSwarmTotal}</span>
+                    </div>
+                    <div className="text-xs text-slate-600 mt-1">
+                      {stats.lastSwarmTotal > 0
+                        ? `${((stats.lastSwarmWins / stats.lastSwarmTotal) * 100).toFixed(0)}% bots profitable`
+                        : 'no attacks yet'}
+                    </div>
+                  </div>
+                  <div className="bg-slate-800 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">All-Time Bot Rate</div>
+                    <div className="font-mono font-bold text-lg">
+                      {stats.swarmBotsWon + stats.swarmBotsLost > 0
+                        ? <span className={((stats.swarmBotsWon / (stats.swarmBotsWon + stats.swarmBotsLost)) * 100) > 60 ? 'text-green-400' : 'text-red-400'}>
+                            {((stats.swarmBotsWon / (stats.swarmBotsWon + stats.swarmBotsLost)) * 100).toFixed(1)}%
+                          </span>
+                        : <span className="text-slate-500">—</span>
+                      }
+                    </div>
+                    <div className="text-xs text-slate-600 mt-1">{stats.swarmBotsWon}W / {stats.swarmBotsLost}L bots</div>
+                  </div>
+                  <div className="bg-slate-800 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">Avg Net / Attack</div>
+                    <div className={`font-mono font-bold text-lg ${stats.totalSwarms > 0 && (stats.realizedProfit / stats.totalSwarms) >= 0 ? 'text-cyan-400' : 'text-red-400'}`}>
+                      {stats.totalSwarms > 0
+                        ? `$${(stats.realizedProfit / stats.totalSwarms).toFixed(4)}`
+                        : '—'}
+                    </div>
+                    <div className="text-xs text-slate-600 mt-1">per swarm attack</div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             <SimulationChart data={chartData} />
 

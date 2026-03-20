@@ -17,6 +17,12 @@ export interface Stats {
   pauseReason: string | null;
   lastTradeTime: number;
   currentRegime: 'low' | 'normal' | 'high' | 'extreme';
+  // Swarm stats
+  totalSwarms: number;
+  lastSwarmWins: number;
+  lastSwarmTotal: number;
+  swarmBotsWon: number;
+  swarmBotsLost: number;
 }
 
 export interface Trade {
@@ -48,6 +54,10 @@ export interface Config {
   enablePredictive: boolean;
   batchSize: number;
   riskLevel: 'low' | 'medium' | 'high';
+  // Swarm mode
+  swarmMode: boolean;
+  swarmBotCount: number;   // number of bots per swarm attack
+  swarmBotSize: number;    // capital per bot in USD
 }
 
 export interface MarketData {
