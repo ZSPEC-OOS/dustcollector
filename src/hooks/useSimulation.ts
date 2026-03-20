@@ -2,13 +2,13 @@ import { useCallback, useRef, useState } from 'react';
 import { Stats, Config, Trade, SimulationState } from '../types';
 
 export function useSimulation(
-  stats: Stats,
+  _stats: Stats,
   config: Config,
   setStats: React.Dispatch<React.SetStateAction<Stats>>,
   setTrades: React.Dispatch<React.SetStateAction<Trade[]>>,
   setLogs: React.Dispatch<React.SetStateAction<string[]>>
 ) {
-  const simulationRef = useRef<NodeJS.Timeout | null>(null);
+  const simulationRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [simulationState, setSimulationState] = useState<SimulationState>('idle');
 
   const generateTrade = useCallback((currentStats: Stats, currentConfig: Config): Trade | null => {
@@ -150,7 +150,7 @@ export function useSimulation(
     setTrades([]);
   }, []);
 
-  const updateConfig = useCallback((newConfig: Config) => {
+  const updateConfig = useCallback((_newConfig: Config) => {
     // Config updates apply immediately
   }, []);
 
