@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Config, RealTradingStatus } from '../types';
-import { Settings, Info, ExternalLink, Eye, EyeOff, AlertTriangle } from 'lucide-react';
+import { Settings, Info, ExternalLink, Eye, EyeOff, AlertTriangle, Zap } from 'lucide-react';
 
 interface ConfigPanelProps {
   config: Config;
@@ -23,6 +23,12 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
     { value: 'medium', label: 'Medium Risk', desc: 'Max 10% daily loss' },
     { value: 'high',   label: 'High Risk',   desc: 'Max 20% daily loss' },
   ];
+
+  const swarmTotal  = config.swarmBotCount * config.swarmBotSize;
+  const swarmPct    = ((swarmTotal / config.initialCapital) * 100).toFixed(1);
+  const swarmOver   = swarmTotal > config.initialCapital;
+  const swarmWarn   = swarmTotal > config.initialCapital * 0.95 && !swarmOver;
+  const belowMinimum = config.swarmBotSize < 10;
 
   return (
     <div className="space-y-6 max-w-3xl">
@@ -62,6 +68,129 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
           <div className="mt-3 flex items-start gap-2 text-yellow-400 bg-yellow-500/10 border border-yellow-500/30 rounded-lg px-4 py-3 text-xs">
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             <span>Real mode places actual orders on Binance using your funds. Only enable if you understand the risks. Note: direct browser→Binance API calls may be blocked by CORS — a backend proxy may be required for order execution.</span>
+          </div>
+        )}
+      </div>
+
+      {/* Swarm Mode */}
+      <div className="bg-slate-900 border border-slate-700 rounded-lg p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Zap className="w-5 h-5 text-yellow-400" />
+            <h3 className="text-lg font-bold text-yellow-400">Swarm Mode</h3>
+            <span className="text-xs text-slate-500 bg-slate-800 px-2 py-0.5 rounded-full">
+              {config.swarmMode ? 'ACTIVE' : 'INACTIVE'}
+            </span>
+          </div>
+          <button
+            onClick={() => onUpdate({ swarmMode: !config.swarmMode })}
+            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+              config.swarmMode ? 'bg-yellow-500' : 'bg-slate-600'
+            }`}
+          >
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+              config.swarmMode ? 'translate-x-6' : 'translate-x-1'
+            }`} />
+          </button>
+        </div>
+
+        <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+          Instead of one large trade, deploy multiple small bots simultaneously on the same market signal.
+          Each bot races independently — most will profit, some will be sacrificed to fees.
+          Reduces slippage, averages entry price, and stabilises win rate across 95% confidence bands.
+        </p>
+
+        {config.swarmMode && (
+          <div className="space-y-4">
+            {/* Bot count */}
+            <div className="bg-slate-800 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-slate-300">Bot Count</label>
+                <span className="text-yellow-400 font-mono text-sm">{config.swarmBotCount} bots</span>
+              </div>
+              <input
+                type="range"
+                min={2}
+                max={50}
+                step={1}
+                value={config.swarmBotCount}
+                onChange={(e) => onUpdate({ swarmBotCount: Number(e.target.value) })}
+                className="w-full accent-yellow-400"
+              />
+              <p className="text-xs text-slate-500 mt-2">
+                Bots per swarm attack. All fire simultaneously on the same opportunity.
+              </p>
+            </div>
+
+            {/* Bot size */}
+            <div className="bg-slate-800 rounded-lg p-4">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-sm font-medium text-slate-300">Capital Per Bot</label>
+                <span className="text-yellow-400 font-mono text-sm">${config.swarmBotSize}</span>
+              </div>
+              <input
+                type="range"
+                min={5}
+                max={50}
+                step={1}
+                value={config.swarmBotSize}
+                onChange={(e) => onUpdate({ swarmBotSize: Number(e.target.value) })}
+                className="w-full accent-yellow-400"
+              />
+              {belowMinimum && (
+                <div className="mt-2 text-xs text-orange-400 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  Binance requires ~$10 minimum notional per order in real mode
+                </div>
+              )}
+              {!belowMinimum && (
+                <p className="text-xs text-slate-500 mt-2">
+                  Trade size per bot. Binance spot minimum is ~$10/order.
+                </p>
+              )}
+            </div>
+
+            {/* Swarm summary */}
+            <div className={`rounded-lg px-4 py-3 text-xs border font-mono ${
+              swarmOver
+                ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                : swarmWarn
+                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400'
+                  : 'bg-yellow-500/5 border-yellow-500/20 text-yellow-300'
+            }`}>
+              <div className="font-bold mb-2 text-sm">
+                {swarmOver ? '✗ Exceeds capital' : swarmWarn ? '⚠ Near capital limit' : '✓ Swarm configured'}
+              </div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                <div>Bots deployed: <span className="font-bold">{config.swarmBotCount}</span></div>
+                <div>Capital per bot: <span className="font-bold">${config.swarmBotSize}</span></div>
+                <div>Total deployed: <span className="font-bold">${swarmTotal.toFixed(0)}</span></div>
+                <div>% of capital: <span className="font-bold">{swarmPct}%</span></div>
+                <div>Reserved (buffer): <span className="font-bold">${(config.initialCapital - swarmTotal).toFixed(2)}</span></div>
+                <div>Fee / swarm: <span className="font-bold">${(config.swarmBotCount * config.swarmBotSize * config.exchangeFee * 2 / 100).toFixed(4)}</span></div>
+              </div>
+              {swarmOver && (
+                <div className="mt-2 opacity-80">
+                  Reduce bot count or bot size so total ≤ ${config.initialCapital.toFixed(0)} capital.
+                </div>
+              )}
+            </div>
+
+            {/* Rate limit note */}
+            <div className="text-xs text-slate-500 bg-slate-800/50 rounded-lg px-4 py-3">
+              <div className="font-medium text-slate-400 mb-1">Exchange constraints (real mode):</div>
+              <ul className="space-y-0.5 list-disc list-inside">
+                <li>Binance: 50 orders / 10s per API key — {config.swarmBotCount} bots × 3 legs = {config.swarmBotCount * 3} orders</li>
+                <li>All bots share the same signal; execution order is random</li>
+                <li>Later bots may face worse fills as early bots partially close the gap</li>
+              </ul>
+            </div>
+          </div>
+        )}
+
+        {!config.swarmMode && (
+          <div className="text-xs text-slate-500 italic">
+            Enable to split capital into {config.swarmBotCount} × ${config.swarmBotSize} bots per attack instead of a single {config.tradeSizePercent}% trade.
           </div>
         )}
       </div>
@@ -213,9 +342,11 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
 
           <div className="space-y-4">
             <ConfigSlider label="Minimum Spread Threshold" value={config.minSpread} min={0.02} max={0.30} step={0.01} unit="%" onChange={(v) => onUpdate({ minSpread: v })} description="Minimum real bid/ask spread required to attempt a trade" />
-            <ConfigSlider label="Trade Size" value={config.tradeSizePercent} min={50} max={95} step={5} unit="%" onChange={(v) => onUpdate({ tradeSizePercent: v })} description="Percentage of capital used per trade" />
+            {!config.swarmMode && (
+              <ConfigSlider label="Trade Size (single-bot mode)" value={config.tradeSizePercent} min={50} max={95} step={5} unit="%" onChange={(v) => onUpdate({ tradeSizePercent: v })} description="Percentage of capital used per trade (swarm mode uses bot size × count instead)" />
+            )}
             <ConfigSlider label="Max Trades Per Hour" value={config.maxTradesPerHour} min={10} max={600} step={10} unit="" onChange={(v) => onUpdate({ maxTradesPerHour: v })} description="Maximum trade frequency (safety limit)" />
-            <ConfigSlider label="Cooldown Period" value={config.cooldownSeconds} min={10} max={300} step={10} unit="s" onChange={(v) => onUpdate({ cooldownSeconds: v })} description="Minimum time between trades" />
+            <ConfigSlider label="Cooldown Between Attacks" value={config.cooldownSeconds} min={5} max={300} step={5} unit="s" onChange={(v) => onUpdate({ cooldownSeconds: v })} description={config.swarmMode ? 'Minimum time between swarm attacks' : 'Minimum time between trades'} />
           </div>
 
           <div>

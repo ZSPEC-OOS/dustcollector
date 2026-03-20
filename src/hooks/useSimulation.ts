@@ -20,11 +20,8 @@ const DAILY_VOL_USD: Record<string, number> = {
 /** Returns slippage in % for a given trade size */
 function slippagePct(symbol: string, tradeSize: number): number {
   const vol = DAILY_VOL_USD[symbol] ?? 50_000_000;
-  // Model: slippage grows with sqrt of order size relative to market depth
-  // A $100 order on BTC (~0.000005% of daily vol) → ~0.0002% slippage
-  // A $100 order on AR (~0.002% of daily vol)     → ~0.04% slippage
   const relativeSize = tradeSize / vol;
-  return Math.sqrt(relativeSize) * 20; // calibrated constant
+  return Math.sqrt(relativeSize) * 20;
 }
 
 // ---------------------------------------------------------------------------
@@ -40,16 +37,12 @@ const BASE_EXEC: Record<Config['strategy'], number> = {
 
 function execRate(strategy: Config['strategy'], opportunityPct: number): number {
   const base = BASE_EXEC[strategy];
-  // Opportunities < 0.1% are hyper-competitive (dozens of bots hunting them)
-  // Opportunities > 0.3% are rarer but face less competition
   const competitionPenalty = Math.max(0, (0.15 - opportunityPct) / 0.15) * 0.25;
   return Math.max(0.30, base - competitionPenalty);
 }
 
 // ---------------------------------------------------------------------------
 // PRIMARY: Real triangular arbitrage using live cross-pair prices.
-// Checks USDT→BTC→A→USDT vs USDT→A→BTC→USDT for each triangle.
-// Returns the best real arb gap found, or null.
 // ---------------------------------------------------------------------------
 function calcTriangularArb(
   usdtPairs: MarketData[],
@@ -67,17 +60,7 @@ function calcTriangularArb(
 
     if (!aUsdt?.bid || !aUsdt?.ask || !cross?.bid || !cross?.ask) continue;
 
-    // Forward:  USDT → BTC → A → USDT
-    //   Step 1: buy BTC  with USDT at btc.ask
-    //   Step 2: buy A    with BTC  at cross.ask
-    //   Step 3: sell A   for USDT  at aUsdt.bid
-    //   Net = (1/btc.ask) * (1/cross.ask) * aUsdt.bid  — if > 1, profit exists
     const forward = (1 / btc.ask) * (1 / cross.ask) * aUsdt.bid;
-
-    // Reverse:  USDT → A → BTC → USDT
-    //   Step 1: buy A    with USDT at aUsdt.ask
-    //   Step 2: sell A   for BTC  at cross.bid
-    //   Step 3: sell BTC for USDT at btc.bid
     const reverse = (1 / aUsdt.ask) * cross.bid * btc.bid;
 
     const fwdPct = (forward - 1) * 100;
@@ -94,8 +77,7 @@ function calcTriangularArb(
 }
 
 // ---------------------------------------------------------------------------
-// FALLBACK: Volatility-based opportunity model when cross-pair data isn't
-// available yet. Scales with actual live spread data.
+// FALLBACK: Volatility-based opportunity model.
 // ---------------------------------------------------------------------------
 function detectVolatilityOpp(
   market: MarketData,
@@ -118,6 +100,68 @@ function detectVolatilityOpp(
 }
 
 // ---------------------------------------------------------------------------
+// Detect the best available signal from live market data.
+// ---------------------------------------------------------------------------
+function detectSignal(
+  live: MarketData[],
+  crossPairs: CrossPairMap,
+  cfg: Config,
+): { symbol: string; opportunityPct: number; path: string } | null {
+  const feeRoundTrip = cfg.exchangeFee * 2;
+
+  let signal = calcTriangularArb(live, crossPairs);
+  if (signal && signal.opportunityPct < feeRoundTrip * 1.5) signal = null;
+
+  if (!signal) {
+    const market = live[Math.floor(Math.random() * live.length)];
+    signal = detectVolatilityOpp(market, live, cfg);
+  }
+
+  return signal;
+}
+
+// ---------------------------------------------------------------------------
+// Build a single trade from a signal at a given trade size.
+// botLabel is optional — used by swarm mode to tag trades with bot #.
+// ---------------------------------------------------------------------------
+function buildTrade(
+  signal: { symbol: string; opportunityPct: number; path: string },
+  tradeSize: number,
+  cfg: Config,
+  botLabel?: string,
+): Trade | null {
+  const { symbol, opportunityPct, path } = signal;
+  const feeRoundTrip = cfg.exchangeFee * 2;
+  const slip        = slippagePct(symbol, tradeSize);
+  const netOppPct   = opportunityPct - slip;
+  const feeRateDec  = feeRoundTrip / 100;
+  const fee         = tradeSize * feeRateDec;
+  const grossProfit = tradeSize * (opportunityPct / 100);
+  const netIfWin    = tradeSize * (netOppPct / 100) - fee;
+
+  if (netIfWin <= 0) return null;
+
+  const rate      = execRate(cfg.strategy, opportunityPct);
+  const isWin     = Math.random() < rate;
+  const netProfit = isWin ? netIfWin : -(fee + tradeSize * slip / 100);
+
+  return {
+    id:             Math.random().toString(36).substr(2, 9),
+    timestamp:      Date.now(),
+    pair:           botLabel ? `[${botLabel}] ${path}` : path,
+    regime:         REGIME(opportunityPct),
+    spread:         opportunityPct,
+    size:           tradeSize,
+    expectedProfit: netIfWin,
+    grossProfit:    isWin ? grossProfit : 0,
+    fee,
+    actualProfit:   netProfit,
+    netProfit,
+    status:         'completed',
+  };
+}
+
+// ---------------------------------------------------------------------------
 const EMPTY_STATS = (capital: number): Stats => ({
   capital, initialCapital: capital,
   realizedProfit: 0, grossProfit: 0, totalFees: 0,
@@ -125,6 +169,8 @@ const EMPTY_STATS = (capital: number): Stats => ({
   winRate: 0, avgProfit: 0, tradesToday: 0, dailyProfit: 0, dailyLoss: 0,
   isRunning: false, isPaused: false, pauseReason: null,
   lastTradeTime: 0, currentRegime: 'normal',
+  totalSwarms: 0, lastSwarmWins: 0, lastSwarmTotal: 0,
+  swarmBotsWon: 0, swarmBotsLost: 0,
 });
 
 const REGIME = (opp: number): Trade['regime'] =>
@@ -148,59 +194,37 @@ export function useSimulation(
   crossRef.current   = crossPairs;
   configRef.current  = config;
 
+  // ---------------------------------------------------------------------------
+  // Single-bot trade generation (normal mode)
+  // ---------------------------------------------------------------------------
   const generateTrade = useCallback((curr: Stats, cfg: Config): Trade | null => {
     const live = marketRef.current.filter(m => m.price > 0);
     if (live.length === 0) return null;
 
-    const feeRoundTrip = cfg.exchangeFee * 2; // %
-
-    // --- Try real triangular arb first ---
-    let signal = calcTriangularArb(live, crossRef.current);
-
-    // Triangular arb must still clear fees + buffer to be worth it
-    if (signal && signal.opportunityPct < feeRoundTrip * 1.5) signal = null;
-
-    // --- Fallback: volatility-based model ---
-    if (!signal) {
-      const market = live[Math.floor(Math.random() * live.length)];
-      signal = detectVolatilityOpp(market, live, cfg);
-    }
-
+    const signal = detectSignal(live, crossRef.current, cfg);
     if (!signal) return null;
 
-    const { symbol, opportunityPct, path } = signal;
     const tradeSize = curr.capital * (cfg.tradeSizePercent / 100);
+    return buildTrade(signal, tradeSize, cfg);
+  }, []);
 
-    // --- Slippage: reduces effective gross profit ---
-    const slip        = slippagePct(symbol, tradeSize);
-    const netOppPct   = opportunityPct - slip;   // real net opportunity after slippage
-    const feeRateDec  = feeRoundTrip / 100;
-    const fee         = tradeSize * feeRateDec;
-    const grossProfit = tradeSize * (opportunityPct / 100);
-    const netIfWin    = tradeSize * (netOppPct / 100) - fee;
+  // ---------------------------------------------------------------------------
+  // Swarm generation — all bots act on the same market signal simultaneously,
+  // each with independent win/loss probability.
+  // ---------------------------------------------------------------------------
+  const generateSwarm = useCallback((cfg: Config): Trade[] => {
+    const live = marketRef.current.filter(m => m.price > 0);
+    if (live.length === 0) return [];
 
-    // Skip if slippage + fee makes it unviable
-    if (netIfWin <= 0) return null;
+    const signal = detectSignal(live, crossRef.current, cfg);
+    if (!signal) return [];
 
-    // --- Competition-adjusted execution rate ---
-    const rate   = execRate(cfg.strategy, opportunityPct);
-    const isWin  = Math.random() < rate;
-    const netProfit = isWin ? netIfWin : -(fee + tradeSize * slip / 100);
-
-    return {
-      id:             Math.random().toString(36).substr(2, 9),
-      timestamp:      Date.now(),
-      pair:           path,
-      regime:         REGIME(opportunityPct),
-      spread:         opportunityPct,
-      size:           tradeSize,
-      expectedProfit: netIfWin,
-      grossProfit:    isWin ? grossProfit : 0,
-      fee,
-      actualProfit:   netProfit,
-      netProfit,
-      status:         'completed',
-    };
+    const trades: Trade[] = [];
+    for (let i = 0; i < cfg.swarmBotCount; i++) {
+      const trade = buildTrade(signal, cfg.swarmBotSize, cfg, `B${i + 1}`);
+      if (trade) trades.push(trade);
+    }
+    return trades;
   }, []);
 
   const startSimulation = useCallback((speed: number = 1) => {
@@ -223,6 +247,69 @@ export function useSimulation(
           return { ...curr, isPaused: true, pauseReason: 'Daily loss limit hit — bot paused' };
         }
 
+        // Live regime from average market volatility
+        const mData = marketRef.current;
+        const avgVol = mData.reduce((s, m) => s + (m.volatility || 0), 0) / (mData.length || 1);
+        const liveRegime: Trade['regime'] =
+          avgVol > 0.10 ? 'extreme' : avgVol > 0.04 ? 'high' : avgVol > 0.01 ? 'normal' : 'low';
+
+        // ----------------------------------------------------------------
+        // SWARM MODE
+        // ----------------------------------------------------------------
+        if (cfg.swarmMode) {
+          const swarmTrades = generateSwarm(cfg);
+          if (swarmTrades.length === 0) return curr;
+
+          const swarmWins    = swarmTrades.filter(t => t.netProfit > 0).length;
+          const swarmLosses  = swarmTrades.length - swarmWins;
+          const swarmNet     = swarmTrades.reduce((s, t) => s + t.netProfit, 0);
+          const swarmGross   = swarmTrades.reduce((s, t) => s + t.grossProfit, 0);
+          const swarmFees    = swarmTrades.reduce((s, t) => s + t.fee, 0);
+          const swarmDailyP  = swarmTrades.filter(t => t.netProfit > 0).reduce((s, t) => s + t.netProfit, 0);
+          const swarmDailyL  = swarmTrades.filter(t => t.netProfit < 0).reduce((s, t) => s + Math.abs(t.netProfit), 0);
+
+          const totalTrades  = curr.totalTrades + swarmTrades.length;
+          const totalWins    = curr.winningTrades + swarmWins;
+          const newCapital   = curr.capital + swarmNet;
+          const swarmNum     = curr.totalSwarms + 1;
+          const newRealized  = curr.realizedProfit + swarmNet;
+
+          setTrades(prev => [...swarmTrades, ...prev].slice(0, 1000));
+
+          const winPct = ((swarmWins / swarmTrades.length) * 100).toFixed(0);
+          const src = crossRef.current.size > 0 ? 'tri-arb' : 'spread-arb';
+          setLogs(prev => [
+            `[${new Date().toLocaleTimeString()}] SWARM #${swarmNum} [${src}]: ${swarmWins}/${swarmTrades.length} bots won (${winPct}%) | Net: $${swarmNet.toFixed(6)} | Fees: $${swarmFees.toFixed(6)}`,
+            ...prev
+          ].slice(0, 500));
+
+          return {
+            ...curr,
+            capital:         newCapital,
+            grossProfit:     curr.grossProfit + swarmGross,
+            totalFees:       curr.totalFees + swarmFees,
+            realizedProfit:  newRealized,
+            totalTrades,
+            winningTrades:   totalWins,
+            losingTrades:    curr.losingTrades + swarmLosses,
+            winRate:         (totalWins / totalTrades) * 100,
+            avgProfit:       newRealized / totalTrades,
+            tradesToday:     curr.tradesToday + swarmTrades.length,
+            dailyProfit:     curr.dailyProfit + swarmDailyP,
+            dailyLoss:       curr.dailyLoss + swarmDailyL,
+            lastTradeTime:   now,
+            currentRegime:   liveRegime,
+            totalSwarms:     swarmNum,
+            lastSwarmWins:   swarmWins,
+            lastSwarmTotal:  swarmTrades.length,
+            swarmBotsWon:    curr.swarmBotsWon + swarmWins,
+            swarmBotsLost:   curr.swarmBotsLost + swarmLosses,
+          };
+        }
+
+        // ----------------------------------------------------------------
+        // SINGLE-BOT MODE
+        // ----------------------------------------------------------------
         const trade = generateTrade(curr, cfg);
         if (!trade) return curr;
 
@@ -241,12 +328,6 @@ export function useSimulation(
             ...prev
           ].slice(0, 500));
         }
-
-        // Regime from actual average live volatility
-        const mData = marketRef.current;
-        const avgVol = mData.reduce((s, m) => s + (m.volatility || 0), 0) / (mData.length || 1);
-        const liveRegime: Trade['regime'] =
-          avgVol > 0.10 ? 'extreme' : avgVol > 0.04 ? 'high' : avgVol > 0.01 ? 'normal' : 'low';
 
         return {
           ...curr,
@@ -267,7 +348,7 @@ export function useSimulation(
         };
       });
     }, interval);
-  }, [generateTrade]);
+  }, [generateTrade, generateSwarm]);
 
   const pauseSimulation = useCallback(() => {
     if (simulationRef.current) { clearInterval(simulationRef.current); simulationRef.current = null; }
