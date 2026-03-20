@@ -17,11 +17,11 @@ const DEFAULT_CONFIG: Config = {
   initialCapital: 1.00,
   apiKey: '',
   apiSecret: '',
-  exchangeFee: 0.1,
-  minSpread: 0.07,
+  exchangeFee: 0.025,   // maker fee with BNB — realistic for limit-order HFT
+  minSpread: 0.08,      // min opportunity; must exceed round-trip fee to profit
   tradeSizePercent: 80,
-  maxTradesPerHour: 60,
-  cooldownSeconds: 60,
+  maxTradesPerHour: 120,
+  cooldownSeconds: 30,
   strategy: 'adaptive',
   enablePredictive: true,
   batchSize: 5,
