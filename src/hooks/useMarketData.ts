@@ -3,23 +3,74 @@ import { MarketData } from '../types';
 
 // USDT pairs — price + bid/ask for simulation
 const USDT_PAIRS = [
-  { symbol: 'BTC',  binance: 'BTCUSDT',  gecko: 'bitcoin',      spread: 0.015 },
-  { symbol: 'ETH',  binance: 'ETHUSDT',  gecko: 'ethereum',     spread: 0.020 },
-  { symbol: 'SOL',  binance: 'SOLUSDT',  gecko: 'solana',       spread: 0.035 },
-  { symbol: 'BNB',  binance: 'BNBUSDT',  gecko: 'binancecoin',  spread: 0.025 },
-  { symbol: 'ADA',  binance: 'ADAUSDT',  gecko: 'cardano',      spread: 0.050 },
-  { symbol: 'DOT',  binance: 'DOTUSDT',  gecko: 'polkadot',     spread: 0.060 },
-  { symbol: 'LINK', binance: 'LINKUSDT', gecko: 'chainlink',    spread: 0.060 },
-  { symbol: 'AR',   binance: 'ARUSDT',   gecko: 'arweave',      spread: 0.150 },
+  // Tier 1 — top market cap, very liquid
+  { symbol: 'BTC',   binance: 'BTCUSDT',   gecko: 'bitcoin',            spread: 0.015 },
+  { symbol: 'ETH',   binance: 'ETHUSDT',   gecko: 'ethereum',           spread: 0.020 },
+  { symbol: 'XRP',   binance: 'XRPUSDT',   gecko: 'ripple',             spread: 0.030 },
+  { symbol: 'BNB',   binance: 'BNBUSDT',   gecko: 'binancecoin',        spread: 0.025 },
+  { symbol: 'SOL',   binance: 'SOLUSDT',   gecko: 'solana',             spread: 0.035 },
+  { symbol: 'DOGE',  binance: 'DOGEUSDT',  gecko: 'dogecoin',           spread: 0.040 },
+  { symbol: 'ADA',   binance: 'ADAUSDT',   gecko: 'cardano',            spread: 0.040 },
+  { symbol: 'TRX',   binance: 'TRXUSDT',   gecko: 'tron',               spread: 0.040 },
+  { symbol: 'AVAX',  binance: 'AVAXUSDT',  gecko: 'avalanche-2',        spread: 0.035 },
+  { symbol: 'MATIC', binance: 'MATICUSDT', gecko: 'matic-network',      spread: 0.040 },
+  { symbol: 'LTC',   binance: 'LTCUSDT',   gecko: 'litecoin',           spread: 0.025 },
+  { symbol: 'LINK',  binance: 'LINKUSDT',  gecko: 'chainlink',          spread: 0.050 },
+  { symbol: 'XLM',   binance: 'XLMUSDT',   gecko: 'stellar',            spread: 0.050 },
+  { symbol: 'ATOM',  binance: 'ATOMUSDT',  gecko: 'cosmos',             spread: 0.050 },
+  { symbol: 'NEAR',  binance: 'NEARUSDT',  gecko: 'near',               spread: 0.055 },
+  // Tier 2 — mid-cap, good liquidity
+  { symbol: 'DOT',   binance: 'DOTUSDT',   gecko: 'polkadot',           spread: 0.060 },
+  { symbol: 'UNI',   binance: 'UNIUSDT',   gecko: 'uniswap',            spread: 0.060 },
+  { symbol: 'AAVE',  binance: 'AAVEUSDT',  gecko: 'aave',               spread: 0.065 },
+  { symbol: 'ALGO',  binance: 'ALGOUSDT',  gecko: 'algorand',           spread: 0.065 },
+  { symbol: 'FIL',   binance: 'FILUSDT',   gecko: 'filecoin',           spread: 0.075 },
+  { symbol: 'HBAR',  binance: 'HBARUSDT',  gecko: 'hedera-hashgraph',   spread: 0.070 },
+  { symbol: 'VET',   binance: 'VETUSDT',   gecko: 'vechain',            spread: 0.080 },
+  { symbol: 'ICP',   binance: 'ICPUSDT',   gecko: 'internet-computer',  spread: 0.080 },
+  // Tier 3 — lower volume, wider spreads
+  { symbol: 'FTM',   binance: 'FTMUSDT',   gecko: 'fantom',             spread: 0.100 },
+  { symbol: 'THETA', binance: 'THETAUSDT', gecko: 'theta-token',        spread: 0.120 },
+  { symbol: 'SAND',  binance: 'SANDUSDT',  gecko: 'the-sandbox',        spread: 0.120 },
+  { symbol: 'MANA',  binance: 'MANAUSDT',  gecko: 'decentraland',       spread: 0.120 },
+  { symbol: 'CHZ',   binance: 'CHZUSDT',   gecko: 'chiliz',             spread: 0.120 },
+  { symbol: 'AR',    binance: 'ARUSDT',    gecko: 'arweave',            spread: 0.150 },
 ];
 
 // Cross pairs for triangular arb: A/BTC where A/USDT and BTC/USDT are known
 // Real triangular arb: USDT → BTC → A → USDT  vs  direct A/USDT
 export const TRIANGLES = [
-  { base: 'ETH',  stream: 'ethbtc'  },
-  { base: 'BNB',  stream: 'bnbbtc'  },
-  { base: 'SOL',  stream: 'solbtc'  },
-  { base: 'LINK', stream: 'linkbtc' },
+  // Tier 1 — very liquid BTC crosses
+  { base: 'ETH',   stream: 'ethbtc'   },
+  { base: 'XRP',   stream: 'xrpbtc'   },
+  { base: 'BNB',   stream: 'bnbbtc'   },
+  { base: 'SOL',   stream: 'solbtc'   },
+  { base: 'DOGE',  stream: 'dogebtc'  },
+  { base: 'ADA',   stream: 'adabtc'   },
+  { base: 'TRX',   stream: 'trxbtc'   },
+  { base: 'AVAX',  stream: 'avaxbtc'  },
+  { base: 'MATIC', stream: 'maticbtc' },
+  { base: 'LTC',   stream: 'ltcbtc'   },
+  { base: 'LINK',  stream: 'linkbtc'  },
+  { base: 'XLM',   stream: 'xlmbtc'   },
+  { base: 'ATOM',  stream: 'atombtc'  },
+  { base: 'NEAR',  stream: 'nearbtc'  },
+  // Tier 2 — mid-volume BTC crosses
+  { base: 'DOT',   stream: 'dotbtc'   },
+  { base: 'UNI',   stream: 'unibtc'   },
+  { base: 'AAVE',  stream: 'aavebtc'  },
+  { base: 'ALGO',  stream: 'algobtc'  },
+  { base: 'FIL',   stream: 'filbtc'   },
+  { base: 'HBAR',  stream: 'hbarbtc'  },
+  { base: 'VET',   stream: 'vetbtc'   },
+  { base: 'ICP',   stream: 'icpbtc'   },
+  // Tier 3 — thinner BTC crosses
+  { base: 'FTM',   stream: 'ftmbtc'   },
+  { base: 'THETA', stream: 'thetabtc' },
+  { base: 'SAND',  stream: 'sandbtc'  },
+  { base: 'MANA',  stream: 'manabtc'  },
+  { base: 'CHZ',   stream: 'chzbtc'   },
+  { base: 'AR',    stream: 'arbtc'    },
 ];
 
 export type CrossPairMap = Map<string, { bid: number; ask: number }>;

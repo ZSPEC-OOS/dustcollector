@@ -7,14 +7,38 @@ import { CrossPairMap, TRIANGLES } from './useMarketData';
 // A $100 trade on BTC has negligible slippage; AR has thin books.
 // ---------------------------------------------------------------------------
 const DAILY_VOL_USD: Record<string, number> = {
-  BTC: 2_000_000_000,
-  ETH: 1_000_000_000,
-  BNB:   500_000_000,
-  SOL:   300_000_000,
-  ADA:   150_000_000,
-  DOT:    80_000_000,
-  LINK:   80_000_000,
-  AR:      5_000_000,
+  // Tier 1 — very high volume
+  BTC:   2_000_000_000,
+  ETH:   1_000_000_000,
+  XRP:   3_000_000_000,
+  DOGE:  2_000_000_000,
+  TRX:   1_500_000_000,
+  BNB:     500_000_000,
+  LTC:     800_000_000,
+  SOL:     300_000_000,
+  MATIC:   600_000_000,
+  AVAX:    500_000_000,
+  XLM:     400_000_000,
+  ADA:     400_000_000,
+  // Tier 2 — mid volume
+  ATOM:    300_000_000,
+  NEAR:    300_000_000,
+  HBAR:    200_000_000,
+  UNI:     200_000_000,
+  DOT:     200_000_000,
+  ALGO:    150_000_000,
+  FIL:     150_000_000,
+  AAVE:    150_000_000,
+  LINK:    120_000_000,
+  ICP:     100_000_000,
+  VET:     100_000_000,
+  // Tier 3 — lower volume
+  FTM:      80_000_000,
+  SAND:     50_000_000,
+  CHZ:      40_000_000,
+  MANA:     40_000_000,
+  THETA:    30_000_000,
+  AR:        5_000_000,
 };
 
 /** Returns slippage in % for a given trade size */
