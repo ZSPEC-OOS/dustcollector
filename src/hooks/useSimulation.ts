@@ -22,28 +22,34 @@ const EXEC_RATE: Record<Config['strategy'], number> = {
   adaptive:     0.78,
 };
 
-function detectOpportunity(market: MarketData, cfg: Config): number | null {
-  // The raw bid/ask spread on a single exchange (e.g. BTC ~0.001%) is
-  // not the profit – it's the base signal. An HFT arb bot detects
-  // CROSS-PAIR / TRIANGULAR / STATISTICAL discrepancies that are a
-  // multiple of the base spread, driven by volatility and regime.
-  const baseSignal = market.volatility > 0 ? market.volatility : 0.005; // %
+function detectOpportunity(market: MarketData, allMarkets: MarketData[], cfg: Config): number | null {
+  // Use real bid/ask volatility from Binance as the base signal.
+  // When vol is high, opportunities are larger and more frequent — real market behaviour.
+  const baseVol = market.volatility > 0 ? market.volatility : 0.002; // %
 
-  // Regime multiplier: how often does the market throw big opportunities
-  const regimeMult = { low: 2, normal: 6, high: 16, extreme: 35 }[cfg.riskLevel === 'high' ? 'extreme' : cfg.riskLevel === 'low' ? 'low' : 'normal'];
+  // Opportunity frequency scales with volatility.
+  // BTC quiet (vol ~0.001%): ~3% chance per tick
+  // AR volatile (vol ~0.15%): ~30% chance per tick
+  const oppFreq = Math.min(0.45, baseVol * 3);
+  if (Math.random() > oppFreq) return null;
 
-  // Random draw — only a fraction of ticks have a real opportunity
-  if (Math.random() > 0.30) return null; // 70% of ticks: no arb detected
+  // Opportunity size: HFT arb (triangular, statistical) captures 1.5–10× base spread.
+  // Higher volatility = bigger dislocations.
+  // We also factor in whether multiple markets are moving together (corr breakdown).
+  const avgVol = allMarkets.reduce((s, m) => s + (m.volatility || 0), 0) / (allMarkets.length || 1);
+  const mktDisconnect = Math.max(1, baseVol / Math.max(avgVol, 0.001)); // this pair vs average
+  const sizeMult = 1.5 + Math.random() * 8.5 * mktDisconnect;           // 1.5–10× + dislocation bonus
+  const rawOpp = baseVol * sizeMult;
 
-  const rawOpp = baseSignal * regimeMult * (0.5 + Math.random() * 2.0); // variance
+  // Regime: derived from actual opportunity size, not a config knob
+  // (used for logging / display only)
 
-  // Bot won't even touch it if the opportunity doesn't exceed fees + buffer
-  const feeRoundTrip = (cfg.exchangeFee * 2) / 100; // decimal
-  const minProfitable = feeRoundTrip * 100 * 1.5; // need 1.5× fees as margin
+  const feeRoundTrip = (cfg.exchangeFee * 2); // in %
+  const minProfitable = feeRoundTrip * 1.5;   // need 1.5× fee as profit margin
 
   if (rawOpp < Math.max(cfg.minSpread, minProfitable)) return null;
 
-  return rawOpp; // opportunity size in %
+  return rawOpp;
 }
 
 export function useSimulation(
@@ -66,7 +72,7 @@ export function useSimulation(
     if (live.length === 0) return null;
 
     const market = live[Math.floor(Math.random() * live.length)];
-    const opportunity = detectOpportunity(market, cfg);
+    const opportunity = detectOpportunity(market, live, cfg);
     if (!opportunity) return null;
 
     const feeRateTotal = (cfg.exchangeFee * 2) / 100;       // e.g. 0.0005
@@ -138,6 +144,12 @@ export function useSimulation(
           ].slice(0, 500));
         }
 
+        // Regime from actual live market volatility, not config
+        const avgVol = marketDataRef.current.reduce((s, m) => s + (m.volatility || 0), 0)
+          / (marketDataRef.current.length || 1);
+        const liveRegime: Trade['regime'] =
+          avgVol > 0.10 ? 'extreme' : avgVol > 0.04 ? 'high' : avgVol > 0.01 ? 'normal' : 'low';
+
         return {
           ...curr,
           capital:        newCapital,
@@ -153,7 +165,7 @@ export function useSimulation(
           dailyProfit:    isWin  ? curr.dailyProfit + trade.netProfit  : curr.dailyProfit,
           dailyLoss:      !isWin ? curr.dailyLoss   + Math.abs(trade.netProfit) : curr.dailyLoss,
           lastTradeTime:  now,
-          currentRegime:  trade.regime,
+          currentRegime:  liveRegime,
         };
       });
     }, interval);
