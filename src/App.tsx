@@ -59,7 +59,7 @@ function App() {
     pauseSimulation,
     resetSimulation,
     updateConfig
-  } = useSimulation(stats, config, setStats, setTrades, setLogs);
+  } = useSimulation(stats, config, marketData, setStats, setTrades, setLogs);
 
   const addLog = useCallback((message: string) => {
     const timestamp = new Date().toLocaleTimeString();

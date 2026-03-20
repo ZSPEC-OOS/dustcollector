@@ -44,9 +44,13 @@ export interface Config {
 
 export interface MarketData {
   symbol: string;
+  stream: string;
   price: number;
   change: number;
   volatility: number;
+  bid: number;
+  ask: number;
+  connected: boolean;
 }
 
 export type SimulationState = 'idle' | 'running' | 'paused' | 'error';

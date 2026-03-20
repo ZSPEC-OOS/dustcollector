@@ -1,42 +1,30 @@
 import { useCallback, useRef, useState } from 'react';
-import { Stats, Config, Trade, SimulationState } from '../types';
+import { Stats, Config, Trade, SimulationState, MarketData } from '../types';
 
 export function useSimulation(
   _stats: Stats,
   config: Config,
+  marketData: MarketData[],
   setStats: React.Dispatch<React.SetStateAction<Stats>>,
   setTrades: React.Dispatch<React.SetStateAction<Trade[]>>,
   setLogs: React.Dispatch<React.SetStateAction<string[]>>
 ) {
   const simulationRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [simulationState, setSimulationState] = useState<SimulationState>('idle');
+  const marketDataRef = useRef<MarketData[]>(marketData);
+  marketDataRef.current = marketData;
 
   const generateTrade = useCallback((currentStats: Stats, currentConfig: Config): Trade | null => {
-    const hour = new Date().getHours();
-    let regime: 'low' | 'normal' | 'high' | 'extreme' = 'normal';
-    let spreadBase = 0.10;
+    const liveMarkets = marketDataRef.current.filter(m => m.bid > 0 && m.ask > 0);
+    if (liveMarkets.length === 0) return null;
 
-    if (hour >= 2 && hour <= 6) {
-      regime = 'low';
-      spreadBase = 0.15;
-    } else if ((hour >= 8 && hour <= 11) || (hour >= 19 && hour <= 22)) {
-      regime = 'high';
-      spreadBase = 0.08;
-    } else if (hour >= 12 && hour <= 18) {
-      regime = 'extreme';
-      spreadBase = 0.06;
-    }
+    const market = liveMarkets[Math.floor(Math.random() * liveMarkets.length)];
+    const spread = market.bid > 0 ? ((market.ask - market.bid) / market.bid) * 100 : 0;
 
-    if (currentConfig.strategy === 'conservative') spreadBase *= 1.5;
-    if (currentConfig.strategy === 'aggressive') spreadBase *= 0.7;
-
-    const spread = spreadBase * (0.8 + Math.random() * 0.4);
-    
     if (spread < currentConfig.minSpread) return null;
 
     const costs = 0.10;
     const netProfitPct = spread - costs;
-    
     if (netProfitPct <= 0) return null;
 
     const isWin = Math.random() < 0.65;
@@ -45,12 +33,12 @@ export function useSimulation(
     const tradeSize = currentStats.capital * (currentConfig.tradeSizePercent / 100);
     const profit = tradeSize * (actualNetProfit / 100);
 
-    const pairs = ['BTC-USD', 'ETH-USD', 'SOL-USD', 'AR-USD', 'DOT-USD', 'LINK-USD'];
+    const regime = spread > 0.05 ? 'extreme' : spread > 0.02 ? 'high' : spread > 0.01 ? 'normal' : 'low';
 
     return {
       id: Math.random().toString(36).substr(2, 9),
       timestamp: Date.now(),
-      pair: pairs[Math.floor(Math.random() * pairs.length)],
+      pair: `${market.symbol}-USDT`,
       regime,
       spread,
       size: tradeSize,
@@ -63,7 +51,6 @@ export function useSimulation(
 
   const startSimulation = useCallback((speed: number = 1) => {
     if (simulationRef.current) return;
-    
     setSimulationState('running');
     setStats(prev => ({ ...prev, isRunning: true, isPaused: false }));
 
@@ -72,7 +59,7 @@ export function useSimulation(
     simulationRef.current = setInterval(() => {
       setStats(currentStats => {
         const now = Date.now();
-        
+
         if (now - currentStats.lastTradeTime < config.cooldownSeconds * 1000) {
           return currentStats;
         }
@@ -87,7 +74,7 @@ export function useSimulation(
 
         const newCapital = currentStats.capital + trade.netProfit;
         const isWin = trade.netProfit > 0;
-        
+
         const updated: Stats = {
           ...currentStats,
           capital: newCapital,
@@ -151,7 +138,7 @@ export function useSimulation(
   }, []);
 
   const updateConfig = useCallback((_newConfig: Config) => {
-    // Config updates apply immediately
+    // Config updates apply immediately via closure ref
   }, []);
 
   return {
