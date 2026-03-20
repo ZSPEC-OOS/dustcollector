@@ -61,8 +61,8 @@ export interface Config {
   // Reality Check
   realityPreset: 'optimistic' | 'realistic' | 'custom';
   orderType: 'market' | 'limit';
-  takerFee: number;              // % per side — Binance default 0.1%
-  makerFee: number;              // % per side — Binance maker with BNB 0.025%
+  takerFee: number;              // % per side â Binance default 0.1%
+  makerFee: number;              // % per side â Binance maker with BNB 0.025%
   infrastructureLatencyMs: number; // one-way ms latency to exchange
   competitionLevel: 'none' | 'light' | 'semipro' | 'retail';
   opportunityLifetime: 'simulated' | 'relaxed' | 'realistic';
@@ -94,4 +94,99 @@ export interface RealTradingStatus {
   balanceCurrency: string;
   lastOrderId: string | null;
   error: string | null;
+}
+
+// ============================================
+// STRATEGY BRAIN MODULE TYPES
+// ============================================
+
+export type StrategyStatus = 'idle' | 'active' | 'error';
+export type SignalDirection = 'STRONG_BUY' | 'BUY' | 'SELL' | 'STRONG_SELL' | 'NONE';
+export type TrendRegime = 'bullish' | 'bearish' | 'neutral' | 'volatile';
+export type VolatilityRegime = 'low' | 'normal' | 'elevated' | 'extreme';
+
+export interface StrategyConfig {
+  riskPerTrade: number;
+  maxPositionSize: number;
+  minConfidence: number;
+  timeframes: string[];
+  symbols: string[];
+  antiManipulation: boolean;
+  adaptiveSizing: boolean;
+}
+
+export interface MarketRegime {
+  trend: TrendRegime;
+  volatilityRegime: VolatilityRegime;
+}
+
+export interface TradingSignal {
+  direction: SignalDirection;
+  confidence: number;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  riskReward: number;
+  positionSizePct: number;
+  regime: MarketRegime;
+  reasoning: string[];
+  timestamp: number;
+  symbol: string;
+}
+
+export interface StrategyTemplate {
+  id: string;
+  name: string;
+  icon: string;
+  description: string;
+  category: 'basic' | 'advanced' | 'ml';
+  inputs: string[];
+  outputs: string[];
+  defaultConfig: StrategyConfig;
+}
+
+export interface StrategyInstance {
+  instanceId: string;
+  templateId: string;
+  name: string;
+  icon: string;
+  description: string;
+  inputs: string[];
+  outputs: string[];
+  position: { x: number; y: number };
+  config: StrategyConfig;
+  status: StrategyStatus;
+  lastSignal: TradingSignal | null;
+  signals: TradingSignal[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ConnectionMapping {
+  [key: string]: string;
+}
+
+export interface StrategyConnection {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  mapping: ConnectionMapping;
+}
+
+export interface StrategyBrainState {
+  instances: StrategyInstance[];
+  connections: StrategyConnection[];
+  selectedInstanceId: string | null;
+  isConfigPanelOpen: boolean;
+  draggedTemplate: StrategyTemplate | null;
+}
+
+export interface StrategyPerformanceMetrics {
+  totalSignals: number;
+  winRate: number;
+  avgRiskReward: number;
+  totalPnl: number;
+  maxDrawdown: number;
+  profitableTrades: number;
+  losingTrades: number;
 }
