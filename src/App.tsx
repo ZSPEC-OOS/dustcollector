@@ -60,9 +60,9 @@ function App() {
   const elapsedRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startTimeRef = useRef<number>(0);
 
-  const { marketData, volatility } = useMarketData();
+  const { marketData, crossPairs, volatility } = useMarketData();
   const { startSimulation, pauseSimulation, resetSimulation, updateConfig } =
-    useSimulation(stats, config, marketData, setStats, setTrades, setLogs);
+    useSimulation(stats, config, marketData, crossPairs, setStats, setTrades, setLogs);
   const { status: realStatus, connect: realConnect, disconnect: realDisconnect } = useRealTrading();
 
   const isReal = config.mode === 'real';
