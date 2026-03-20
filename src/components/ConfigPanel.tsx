@@ -152,11 +152,38 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
             value={config.exchangeFee}
             min={0.01}
             max={0.5}
-            step={0.01}
+            step={0.005}
             unit="%"
             onChange={(v) => onUpdate({ exchangeFee: v })}
-            description={`Round-trip cost: ${(config.exchangeFee * 2).toFixed(2)}% per trade. Binance standard: 0.1% (0.075% with BNB)`}
+            description={`Round-trip: ${(config.exchangeFee * 2).toFixed(3)}% · Binance taker 0.1%, maker 0.025% (with BNB VIP)`}
           />
+
+          {/* Profitability check */}
+          {(() => {
+            const roundTrip = config.exchangeFee * 2;
+            const isProfitable = config.minSpread > roundTrip * 1.5;
+            return (
+              <div className={`rounded-lg px-4 py-3 text-xs border ${
+                isProfitable
+                  ? 'bg-green-500/10 border-green-500/30 text-green-400'
+                  : 'bg-red-500/10 border-red-500/30 text-red-400'
+              }`}>
+                <div className="font-bold mb-1">{isProfitable ? '✓ Profitable settings' : '✗ Unprofitable settings'}</div>
+                <div className="space-y-0.5 font-mono">
+                  <div>Min spread required to break even: <span className="font-bold">{roundTrip.toFixed(3)}%</span></div>
+                  <div>Your min spread threshold: <span className="font-bold">{config.minSpread.toFixed(3)}%</span></div>
+                  <div>Net margin per trade: <span className={`font-bold ${isProfitable ? 'text-green-300' : 'text-red-300'}`}>
+                    {(config.minSpread - roundTrip).toFixed(3)}%
+                  </span></div>
+                </div>
+                {!isProfitable && (
+                  <div className="mt-2 opacity-80">
+                    Lower Exchange Fee or raise Min Spread Threshold above {(roundTrip * 1.5).toFixed(3)}% to profit.
+                  </div>
+                )}
+              </div>
+            );
+          })()}
         </div>
       </div>
 
