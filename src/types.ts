@@ -58,6 +58,15 @@ export interface Config {
   swarmMode: boolean;
   swarmBotCount: number;   // number of bots per swarm attack
   swarmBotSize: number;    // capital per bot in USD
+  // Reality Check
+  realityPreset: 'optimistic' | 'realistic' | 'custom';
+  orderType: 'market' | 'limit';
+  takerFee: number;              // % per side — Binance default 0.1%
+  makerFee: number;              // % per side — Binance maker with BNB 0.025%
+  infrastructureLatencyMs: number; // one-way ms latency to exchange
+  competitionLevel: 'none' | 'light' | 'semipro' | 'retail';
+  opportunityLifetime: 'simulated' | 'relaxed' | 'realistic';
+  opportunityFrequency: 'optimistic' | 'moderate' | 'realistic';
 }
 
 export interface MarketData {

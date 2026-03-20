@@ -25,8 +25,7 @@ function slippagePct(symbol: string, tradeSize: number): number {
 }
 
 // ---------------------------------------------------------------------------
-// Execution success rate — strategy + competition for the opportunity size.
-// Small arb gaps close in milliseconds; larger ones persist longer.
+// Execution success rate — two models depending on realityPreset.
 // ---------------------------------------------------------------------------
 const BASE_EXEC: Record<Config['strategy'], number> = {
   conservative: 0.84,
@@ -35,10 +34,57 @@ const BASE_EXEC: Record<Config['strategy'], number> = {
   adaptive:     0.79,
 };
 
-function execRate(strategy: Config['strategy'], opportunityPct: number): number {
-  const base = BASE_EXEC[strategy];
-  const competitionPenalty = Math.max(0, (0.15 - opportunityPct) / 0.15) * 0.25;
-  return Math.max(0.30, base - competitionPenalty);
+// Number of competing bots hunting the same arb gap at the same time.
+const COMPETITION_BOTS: Record<Config['competitionLevel'], number> = {
+  none:    1,
+  light:   20,
+  semipro: 100,
+  retail:  500,
+};
+
+// Randomly sample how long a given arb opportunity persists (ms).
+function sampleOppLifetimeMs(lifetime: Config['opportunityLifetime']): number {
+  switch (lifetime) {
+    case 'realistic': return 10  + Math.random() * 40;   // 10–50 ms — HFT world
+    case 'relaxed':   return 100 + Math.random() * 400;  // 100–500 ms — some retail chance
+    case 'simulated': return 5000 + Math.random() * 55000; // 5–60 s — sim default
+  }
+}
+
+function execRate(cfg: Config, opportunityPct: number): number {
+  if (cfg.realityPreset === 'optimistic') {
+    // Legacy optimistic model — strategy-based, high base success rates
+    const base = BASE_EXEC[cfg.strategy];
+    const competitionPenalty = Math.max(0, (0.15 - opportunityPct) / 0.15) * 0.25;
+    return Math.max(0.30, base - competitionPenalty);
+  }
+
+  // Realistic model: latency × competition probability
+  const oppLifetimeMs = sampleOppLifetimeMs(cfg.opportunityLifetime);
+  const latencyMs     = cfg.infrastructureLatencyMs;
+
+  // If latency exceeds opportunity window, zero chance
+  if (latencyMs >= oppLifetimeMs) return 0;
+
+  // Fraction of the window still open after our request arrives
+  const timeAdvantage    = (oppLifetimeMs - latencyMs) / oppLifetimeMs;
+  // Probability of being first among all competing bots
+  const competitors      = COMPETITION_BOTS[cfg.competitionLevel];
+  const competitionProb  = 1 / (competitors + 1);
+
+  return Math.max(0, timeAdvantage * competitionProb);
+}
+
+// ---------------------------------------------------------------------------
+// Effective fee rate and legs for a trade.
+// Tri-arb = 3 legs (not 2); market orders pay taker rate, not maker.
+// ---------------------------------------------------------------------------
+function tradeFeePct(cfg: Config): { feeRate: number; legs: number } {
+  if (cfg.realityPreset === 'optimistic') {
+    return { feeRate: cfg.exchangeFee, legs: 2 };  // legacy round-trip
+  }
+  const feeRate = cfg.orderType === 'market' ? cfg.takerFee : cfg.makerFee;
+  return { feeRate, legs: 3 };  // tri-arb: 3 independent legs
 }
 
 // ---------------------------------------------------------------------------
@@ -92,8 +138,9 @@ function detectVolatilityOpp(
   const disconnect   = Math.max(1, baseVol / Math.max(avgVol, 0.001));
   const opportunityPct = baseVol * (1.5 + Math.random() * 8.5 * disconnect);
 
-  const feeRoundTrip  = cfg.exchangeFee * 2;
-  const minProfitable = feeRoundTrip * 1.5;
+  const { feeRate, legs } = tradeFeePct(cfg);
+  const totalFeePct   = feeRate * legs;
+  const minProfitable = totalFeePct * 1.5;
   if (opportunityPct < Math.max(cfg.minSpread, minProfitable)) return null;
 
   return { symbol: market.symbol, opportunityPct, path: `${market.symbol}/USDT spread` };
@@ -107,10 +154,23 @@ function detectSignal(
   crossPairs: CrossPairMap,
   cfg: Config,
 ): { symbol: string; opportunityPct: number; path: string } | null {
-  const feeRoundTrip = cfg.exchangeFee * 2;
+  // In non-optimistic modes, gate how often a signal is even attempted.
+  // Real tri-arb on major pairs: ~2/hr for retail; ~10/hr in moderate conditions.
+  if (cfg.realityPreset !== 'optimistic') {
+    const oppsPerHour = cfg.opportunityFrequency === 'realistic' ? 2
+                      : cfg.opportunityFrequency === 'moderate'  ? 10
+                      : 360;
+    // cooldownSeconds governs how often this function is called
+    const ticksPerHour = 3600 / Math.max(cfg.cooldownSeconds, 1);
+    const probPerTick  = oppsPerHour / ticksPerHour;
+    if (Math.random() > probPerTick) return null;
+  }
+
+  const { feeRate, legs } = tradeFeePct(cfg);
+  const totalFeePct = feeRate * legs;
 
   let signal = calcTriangularArb(live, crossPairs);
-  if (signal && signal.opportunityPct < feeRoundTrip * 1.5) signal = null;
+  if (signal && signal.opportunityPct < totalFeePct * 1.5) signal = null;
 
   if (!signal) {
     const market = live[Math.floor(Math.random() * live.length)];
@@ -131,17 +191,16 @@ function buildTrade(
   botLabel?: string,
 ): Trade | null {
   const { symbol, opportunityPct, path } = signal;
-  const feeRoundTrip = cfg.exchangeFee * 2;
+  const { feeRate, legs } = tradeFeePct(cfg);
   const slip        = slippagePct(symbol, tradeSize);
   const netOppPct   = opportunityPct - slip;
-  const feeRateDec  = feeRoundTrip / 100;
-  const fee         = tradeSize * feeRateDec;
+  const fee         = tradeSize * (feeRate * legs / 100);
   const grossProfit = tradeSize * (opportunityPct / 100);
   const netIfWin    = tradeSize * (netOppPct / 100) - fee;
 
   if (netIfWin <= 0) return null;
 
-  const rate      = execRate(cfg.strategy, opportunityPct);
+  const rate      = execRate(cfg, opportunityPct);
   const isWin     = Math.random() < rate;
   const netProfit = isWin ? netIfWin : -(fee + tradeSize * slip / 100);
 

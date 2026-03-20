@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Config, RealTradingStatus } from '../types';
-import { Settings, Info, ExternalLink, Eye, EyeOff, AlertTriangle, Zap } from 'lucide-react';
+import { Settings, Info, ExternalLink, Eye, EyeOff, AlertTriangle, Zap, FlaskConical } from 'lucide-react';
 
 interface ConfigPanelProps {
   config: Config;
@@ -22,6 +22,43 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
     { value: 'low',    label: 'Low Risk',    desc: 'Max 5% daily loss' },
     { value: 'medium', label: 'Medium Risk', desc: 'Max 10% daily loss' },
     { value: 'high',   label: 'High Risk',   desc: 'Max 20% daily loss' },
+  ];
+
+  // Reality Score: 0–100 representing how close to real-world conditions
+  const realityScore = (() => {
+    if (config.realityPreset === 'optimistic') return 0;
+    if (config.realityPreset === 'realistic')  return 100;
+    let score = 0;
+    if (config.takerFee >= 0.1)                score += 25;
+    if (config.infrastructureLatencyMs >= 100) score += 25;
+    const compScore = { retail: 25, semipro: 15, light: 8, none: 0 };
+    score += compScore[config.competitionLevel] ?? 0;
+    const freqScore = { realistic: 25, moderate: 15, optimistic: 0 };
+    score += freqScore[config.opportunityFrequency] ?? 0;
+    return score;
+  })();
+
+  const INFRA_OPTIONS: { label: string; desc: string; ms: number }[] = [
+    { label: 'Browser',      desc: '+150–250ms (typical home broadband → REST API)',  ms: 200 },
+    { label: 'Node Server',  desc: '+20–50ms (remote VPS, no co-location)',           ms: 35  },
+    { label: 'VPS Near Exch',desc: '+5–15ms (cloud VM in same region as Binance)',    ms: 10  },
+    { label: 'Co-located',   desc: '+1–3ms (server physically inside exchange DC)',   ms: 2   },
+  ];
+
+  const COMPETITION_OPTIONS: { value: Config['competitionLevel']; label: string; desc: string }[] = [
+    { value: 'none',    label: 'None',     desc: 'Testing only — no competition modeled' },
+    { value: 'light',   label: 'Light',    desc: '~20 bots — obscure pairs, thin markets' },
+    { value: 'semipro', label: 'Semi-Pro', desc: '~100 bots — minor pairs, some competition' },
+    { value: 'retail',  label: 'Retail',   desc: '~500 bots — major pairs on Binance (realistic)' },
+  ];
+
+  const FEE_TIERS: { label: string; taker: number; maker: number; note: string }[] = [
+    { label: 'Retail (default)',  taker: 0.100, maker: 0.020, note: 'No BNB, no VIP' },
+    { label: 'Retail + BNB',      taker: 0.075, maker: 0.015, note: '25% BNB discount' },
+    { label: 'VIP 1',             taker: 0.090, maker: 0.018, note: '$1M/mo volume' },
+    { label: 'VIP 5',             taker: 0.040, maker: 0.012, note: '$150M/mo volume' },
+    { label: 'VIP 9 (max)',       taker: 0.020, maker: 0.010, note: '>$4B/mo volume' },
+    { label: 'Maker w/ BNB+VIP1', taker: 0.090, maker: 0.025, note: 'Old sim default' },
   ];
 
   const swarmTotal  = config.swarmBotCount * config.swarmBotSize;
@@ -69,6 +106,199 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
             <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
             <span>Real mode places actual orders on Binance using your funds. Only enable if you understand the risks. Note: direct browser→Binance API calls may be blocked by CORS — a backend proxy may be required for order execution.</span>
           </div>
+        )}
+      </div>
+
+      {/* Reality Check */}
+      <div className="bg-slate-900 border border-purple-500/40 rounded-lg p-6">
+        <div className="flex items-center gap-2 mb-4">
+          <FlaskConical className="w-5 h-5 text-purple-400" />
+          <h3 className="text-lg font-bold text-purple-400">Reality Check</h3>
+          <span className="ml-auto text-xs text-slate-500">
+            accuracy: <span className={`font-bold ${realityScore >= 75 ? 'text-green-400' : realityScore >= 40 ? 'text-yellow-400' : 'text-orange-400'}`}>{realityScore}/100</span>
+          </span>
+        </div>
+
+        {/* Reality Score bar */}
+        <div className="mb-4">
+          <div className="h-2 rounded-full bg-slate-800 overflow-hidden">
+            <div
+              className={`h-2 rounded-full transition-all duration-500 ${realityScore >= 75 ? 'bg-green-500' : realityScore >= 40 ? 'bg-yellow-500' : 'bg-orange-500'}`}
+              style={{ width: `${realityScore}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-xs text-slate-600 mt-1">
+            <span>Optimistic (learning)</span>
+            <span>Real-world accurate</span>
+          </div>
+        </div>
+
+        {/* Preset selector */}
+        <div className="grid grid-cols-3 gap-3 mb-4">
+          {([
+            { value: 'optimistic', label: '⚡ Optimistic', desc: 'Ideal conditions. Educational — shows potential.' },
+            { value: 'realistic',  label: '🌍 Realistic',  desc: 'Real constraints: taker fees, latency, 500+ bot competition.' },
+            { value: 'custom',     label: '⚙ Custom',      desc: 'Manually tune each parameter.' },
+          ] as const).map(p => (
+            <button
+              key={p.value}
+              onClick={() => onUpdate({ realityPreset: p.value })}
+              className={`p-3 rounded-lg border text-left transition-all ${
+                config.realityPreset === p.value
+                  ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                  : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-slate-500'
+              }`}
+            >
+              <div className="font-bold text-sm">{p.label}</div>
+              <div className="text-xs opacity-60 mt-1 leading-tight">{p.desc}</div>
+            </button>
+          ))}
+        </div>
+
+        {/* Summary of active constraints */}
+        {config.realityPreset !== 'optimistic' && (
+          <div className="bg-slate-800/60 rounded-lg px-4 py-3 mb-4 text-xs font-mono space-y-1">
+            <div className="text-slate-400 font-medium mb-2">Active constraints:</div>
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-slate-300">
+              <div>Order type: <span className="text-purple-300">{config.orderType === 'market' ? 'Market (taker)' : 'Limit (maker)'}</span></div>
+              <div>Fee/leg: <span className="text-purple-300">{config.orderType === 'market' ? config.takerFee : config.makerFee}% × 3 legs = {((config.orderType === 'market' ? config.takerFee : config.makerFee) * 3).toFixed(3)}% total</span></div>
+              <div>Latency: <span className="text-purple-300">{config.infrastructureLatencyMs}ms one-way</span></div>
+              <div>Competitors: <span className="text-purple-300">~{({ none: 1, light: 20, semipro: 100, retail: 500 })[config.competitionLevel]} bots</span></div>
+              <div>Opp. lifetime: <span className="text-purple-300">{{ realistic: '10–50ms', relaxed: '100–500ms', simulated: '5–60s' }[config.opportunityLifetime]}</span></div>
+              <div>Opp. frequency: <span className="text-purple-300">~{{ realistic: '2', moderate: '10', optimistic: '360' }[config.opportunityFrequency]}/hr</span></div>
+            </div>
+          </div>
+        )}
+
+        {/* Custom sub-settings */}
+        {config.realityPreset === 'custom' && (
+          <div className="space-y-4">
+
+            {/* Order type */}
+            <div>
+              <div className="text-sm font-medium text-slate-300 mb-2">Order Type</div>
+              <div className="grid grid-cols-2 gap-3">
+                {([
+                  { value: 'market', label: 'Market (Taker)', desc: 'Instant fill. Binance default: 0.1%/leg.' },
+                  { value: 'limit',  label: 'Limit (Maker)',  desc: 'May not fill before gap closes. 0.025%/leg.' },
+                ] as const).map(o => (
+                  <button key={o.value} onClick={() => onUpdate({ orderType: o.value })}
+                    className={`p-3 rounded-lg border text-left transition-all text-sm ${config.orderType === o.value ? 'bg-purple-500/20 border-purple-500 text-purple-300' : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-slate-500'}`}>
+                    <div className="font-bold">{o.label}</div>
+                    <div className="text-xs opacity-60 mt-1">{o.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Fee tier */}
+            <div>
+              <div className="text-sm font-medium text-slate-300 mb-2">Fee Tier</div>
+              <div className="grid grid-cols-1 gap-2">
+                {FEE_TIERS.map(tier => (
+                  <button
+                    key={tier.label}
+                    onClick={() => onUpdate({ takerFee: tier.taker, makerFee: tier.maker })}
+                    className={`px-4 py-2 rounded-lg border text-left transition-all text-xs flex items-center justify-between ${
+                      config.takerFee === tier.taker && config.makerFee === tier.maker
+                        ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                        : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    <span className="font-medium">{tier.label}</span>
+                    <span className="font-mono text-slate-500">taker {tier.taker}% · maker {tier.maker}% — {tier.note}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Infrastructure / Latency */}
+            <div>
+              <div className="text-sm font-medium text-slate-300 mb-2">Infrastructure (Latency)</div>
+              <div className="grid grid-cols-2 gap-2">
+                {INFRA_OPTIONS.map(opt => (
+                  <button
+                    key={opt.label}
+                    onClick={() => onUpdate({ infrastructureLatencyMs: opt.ms })}
+                    className={`p-3 rounded-lg border text-left transition-all text-xs ${
+                      config.infrastructureLatencyMs === opt.ms
+                        ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                        : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    <div className="font-bold">{opt.label} <span className="font-mono">({opt.ms}ms)</span></div>
+                    <div className="opacity-60 mt-1 leading-tight">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Competition level */}
+            <div>
+              <div className="text-sm font-medium text-slate-300 mb-2">Competition Level</div>
+              <div className="grid grid-cols-2 gap-2">
+                {COMPETITION_OPTIONS.map(opt => (
+                  <button
+                    key={opt.value}
+                    onClick={() => onUpdate({ competitionLevel: opt.value })}
+                    className={`p-3 rounded-lg border text-left transition-all text-xs ${
+                      config.competitionLevel === opt.value
+                        ? 'bg-purple-500/20 border-purple-500 text-purple-300'
+                        : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-slate-500'
+                    }`}
+                  >
+                    <div className="font-bold">{opt.label}</div>
+                    <div className="opacity-60 mt-1">{opt.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Opportunity lifetime */}
+            <div>
+              <div className="text-sm font-medium text-slate-300 mb-2">Opportunity Lifetime</div>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { value: 'realistic', label: '10–50ms',  desc: 'HFT reality — near-impossible for retail' },
+                  { value: 'relaxed',   label: '100–500ms', desc: 'Some retail chance with fast infra' },
+                  { value: 'simulated', label: '5–60s',     desc: 'Sim default — gaps persist for seconds' },
+                ] as const).map(o => (
+                  <button key={o.value} onClick={() => onUpdate({ opportunityLifetime: o.value })}
+                    className={`p-3 rounded-lg border text-left transition-all text-xs ${config.opportunityLifetime === o.value ? 'bg-purple-500/20 border-purple-500 text-purple-300' : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-slate-500'}`}>
+                    <div className="font-bold font-mono">{o.label}</div>
+                    <div className="opacity-60 mt-1 leading-tight">{o.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Opportunity frequency */}
+            <div>
+              <div className="text-sm font-medium text-slate-300 mb-2">Opportunity Frequency</div>
+              <div className="grid grid-cols-3 gap-2">
+                {([
+                  { value: 'realistic',  label: '~2/hr',   desc: 'Genuine arb gaps survive long enough for retail' },
+                  { value: 'moderate',   label: '~10/hr',  desc: 'Moderate — mid-tier pairs or manual monitoring' },
+                  { value: 'optimistic', label: '~360/hr', desc: 'Sim default — treated as always available' },
+                ] as const).map(o => (
+                  <button key={o.value} onClick={() => onUpdate({ opportunityFrequency: o.value })}
+                    className={`p-3 rounded-lg border text-left transition-all text-xs ${config.opportunityFrequency === o.value ? 'bg-purple-500/20 border-purple-500 text-purple-300' : 'bg-slate-800 border-slate-600 text-slate-400 hover:border-slate-500'}`}>
+                    <div className="font-bold font-mono">{o.label}</div>
+                    <div className="opacity-60 mt-1 leading-tight">{o.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+          </div>
+        )}
+
+        {config.realityPreset === 'optimistic' && (
+          <p className="text-xs text-slate-500 italic leading-relaxed">
+            Optimistic mode uses ideal conditions: maker fees, instant execution, minimal competition.
+            Great for learning how the strategy works — not representative of real trading outcomes.
+            Switch to <span className="text-purple-400">Realistic</span> to see true expected performance.
+          </p>
         )}
       </div>
 
@@ -167,7 +397,13 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
                 <div>Total deployed: <span className="font-bold">${swarmTotal.toFixed(0)}</span></div>
                 <div>% of capital: <span className="font-bold">{swarmPct}%</span></div>
                 <div>Reserved (buffer): <span className="font-bold">${(config.initialCapital - swarmTotal).toFixed(2)}</span></div>
-                <div>Fee / swarm: <span className="font-bold">${(config.swarmBotCount * config.swarmBotSize * config.exchangeFee * 2 / 100).toFixed(4)}</span></div>
+                <div>Fee / swarm: <span className="font-bold">${(() => {
+                  const feeRate = config.realityPreset !== 'optimistic'
+                    ? (config.orderType === 'market' ? config.takerFee : config.makerFee)
+                    : config.exchangeFee;
+                  const legs = config.realityPreset !== 'optimistic' ? 3 : 2;
+                  return (config.swarmBotCount * config.swarmBotSize * feeRate * legs / 100).toFixed(4);
+                })()}</span></div>
               </div>
               {swarmOver && (
                 <div className="mt-2 opacity-80">
@@ -289,8 +525,13 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
 
           {/* Profitability check */}
           {(() => {
-            const roundTrip = config.exchangeFee * 2;
-            const isProfitable = config.minSpread > roundTrip * 1.5;
+            const isRealistic = config.realityPreset !== 'optimistic';
+            const feeRate     = isRealistic
+              ? (config.orderType === 'market' ? config.takerFee : config.makerFee)
+              : config.exchangeFee;
+            const legs        = isRealistic ? 3 : 2;
+            const totalFee    = feeRate * legs;
+            const isProfitable = config.minSpread > totalFee * 1.5;
             return (
               <div className={`rounded-lg px-4 py-3 text-xs border ${
                 isProfitable
@@ -299,15 +540,18 @@ export const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onUpdate, real
               }`}>
                 <div className="font-bold mb-1">{isProfitable ? '✓ Profitable settings' : '✗ Unprofitable settings'}</div>
                 <div className="space-y-0.5 font-mono">
-                  <div>Min spread required to break even: <span className="font-bold">{roundTrip.toFixed(3)}%</span></div>
+                  <div>Fee model: <span className="font-bold">{feeRate}% × {legs} legs = {totalFee.toFixed(3)}% total</span>
+                    {isRealistic && <span className="text-slate-500 ml-1">(tri-arb, {config.orderType})</span>}
+                  </div>
+                  <div>Break-even spread: <span className="font-bold">{totalFee.toFixed(3)}%</span></div>
                   <div>Your min spread threshold: <span className="font-bold">{config.minSpread.toFixed(3)}%</span></div>
-                  <div>Net margin per trade: <span className={`font-bold ${isProfitable ? 'text-green-300' : 'text-red-300'}`}>
-                    {(config.minSpread - roundTrip).toFixed(3)}%
+                  <div>Net margin: <span className={`font-bold ${isProfitable ? 'text-green-300' : 'text-red-300'}`}>
+                    {(config.minSpread - totalFee).toFixed(3)}%
                   </span></div>
                 </div>
                 {!isProfitable && (
                   <div className="mt-2 opacity-80">
-                    Lower Exchange Fee or raise Min Spread Threshold above {(roundTrip * 1.5).toFixed(3)}% to profit.
+                    Raise Min Spread above {(totalFee * 1.5).toFixed(3)}% or lower fees to turn profitable.
                   </div>
                 )}
               </div>
