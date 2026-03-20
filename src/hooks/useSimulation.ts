@@ -1,6 +1,123 @@
 import { useCallback, useRef, useState } from 'react';
 import { Stats, Config, Trade, SimulationState, MarketData } from '../types';
+import { CrossPairMap, TRIANGLES } from './useMarketData';
 
+// ---------------------------------------------------------------------------
+// Slippage model — based on estimated daily liquidity per pair.
+// A $100 trade on BTC has negligible slippage; AR has thin books.
+// ---------------------------------------------------------------------------
+const DAILY_VOL_USD: Record<string, number> = {
+  BTC: 2_000_000_000,
+  ETH: 1_000_000_000,
+  BNB:   500_000_000,
+  SOL:   300_000_000,
+  ADA:   150_000_000,
+  DOT:    80_000_000,
+  LINK:   80_000_000,
+  AR:      5_000_000,
+};
+
+/** Returns slippage in % for a given trade size */
+function slippagePct(symbol: string, tradeSize: number): number {
+  const vol = DAILY_VOL_USD[symbol] ?? 50_000_000;
+  // Model: slippage grows with sqrt of order size relative to market depth
+  // A $100 order on BTC (~0.000005% of daily vol) → ~0.0002% slippage
+  // A $100 order on AR (~0.002% of daily vol)     → ~0.04% slippage
+  const relativeSize = tradeSize / vol;
+  return Math.sqrt(relativeSize) * 20; // calibrated constant
+}
+
+// ---------------------------------------------------------------------------
+// Execution success rate — strategy + competition for the opportunity size.
+// Small arb gaps close in milliseconds; larger ones persist longer.
+// ---------------------------------------------------------------------------
+const BASE_EXEC: Record<Config['strategy'], number> = {
+  conservative: 0.84,
+  balanced:     0.76,
+  aggressive:   0.69,
+  adaptive:     0.79,
+};
+
+function execRate(strategy: Config['strategy'], opportunityPct: number): number {
+  const base = BASE_EXEC[strategy];
+  // Opportunities < 0.1% are hyper-competitive (dozens of bots hunting them)
+  // Opportunities > 0.3% are rarer but face less competition
+  const competitionPenalty = Math.max(0, (0.15 - opportunityPct) / 0.15) * 0.25;
+  return Math.max(0.30, base - competitionPenalty);
+}
+
+// ---------------------------------------------------------------------------
+// PRIMARY: Real triangular arbitrage using live cross-pair prices.
+// Checks USDT→BTC→A→USDT vs USDT→A→BTC→USDT for each triangle.
+// Returns the best real arb gap found, or null.
+// ---------------------------------------------------------------------------
+function calcTriangularArb(
+  usdtPairs: MarketData[],
+  crossPairs: CrossPairMap,
+): { symbol: string; opportunityPct: number; path: string } | null {
+  const btc = usdtPairs.find(m => m.symbol === 'BTC');
+  if (!btc?.bid || !btc?.ask) return null;
+
+  let best: { symbol: string; opportunityPct: number; path: string } | null = null;
+
+  for (const tri of TRIANGLES) {
+    const aUsdt = usdtPairs.find(m => m.symbol === tri.base);
+    const crossKey = (tri.base + 'BTC').toUpperCase();
+    const cross = crossPairs.get(crossKey);
+
+    if (!aUsdt?.bid || !aUsdt?.ask || !cross?.bid || !cross?.ask) continue;
+
+    // Forward:  USDT → BTC → A → USDT
+    //   Step 1: buy BTC  with USDT at btc.ask
+    //   Step 2: buy A    with BTC  at cross.ask
+    //   Step 3: sell A   for USDT  at aUsdt.bid
+    //   Net = (1/btc.ask) * (1/cross.ask) * aUsdt.bid  — if > 1, profit exists
+    const forward = (1 / btc.ask) * (1 / cross.ask) * aUsdt.bid;
+
+    // Reverse:  USDT → A → BTC → USDT
+    //   Step 1: buy A    with USDT at aUsdt.ask
+    //   Step 2: sell A   for BTC  at cross.bid
+    //   Step 3: sell BTC for USDT at btc.bid
+    const reverse = (1 / aUsdt.ask) * cross.bid * btc.bid;
+
+    const fwdPct = (forward - 1) * 100;
+    const revPct = (reverse - 1) * 100;
+    const best1  = fwdPct > revPct ? { pct: fwdPct, path: `USDT→BTC→${tri.base}→USDT` }
+                                   : { pct: revPct, path: `USDT→${tri.base}→BTC→USDT` };
+
+    if (best1.pct > 0 && (!best || best1.pct > best.opportunityPct)) {
+      best = { symbol: tri.base, opportunityPct: best1.pct, path: best1.path };
+    }
+  }
+
+  return best;
+}
+
+// ---------------------------------------------------------------------------
+// FALLBACK: Volatility-based opportunity model when cross-pair data isn't
+// available yet. Scales with actual live spread data.
+// ---------------------------------------------------------------------------
+function detectVolatilityOpp(
+  market: MarketData,
+  allMarkets: MarketData[],
+  cfg: Config,
+): { symbol: string; opportunityPct: number; path: string } | null {
+  const baseVol = market.volatility > 0 ? market.volatility : 0.002;
+  const oppFreq = Math.min(0.40, baseVol * 3);
+  if (Math.random() > oppFreq) return null;
+
+  const avgVol       = allMarkets.reduce((s, m) => s + (m.volatility || 0), 0) / (allMarkets.length || 1);
+  const disconnect   = Math.max(1, baseVol / Math.max(avgVol, 0.001));
+  const opportunityPct = baseVol * (1.5 + Math.random() * 8.5 * disconnect);
+
+  const feeRoundTrip  = cfg.exchangeFee * 2;
+  const minProfitable = feeRoundTrip * 1.5;
+  if (opportunityPct < Math.max(cfg.minSpread, minProfitable)) return null;
+
+  return { symbol: market.symbol, opportunityPct, path: `${market.symbol}/USDT spread` };
+}
+
+// ---------------------------------------------------------------------------
 const EMPTY_STATS = (capital: number): Stats => ({
   capital, initialCapital: capital,
   realizedProfit: 0, grossProfit: 0, totalFees: 0,
@@ -10,99 +127,79 @@ const EMPTY_STATS = (capital: number): Stats => ({
   lastTradeTime: 0, currentRegime: 'normal',
 });
 
-// Regime thresholds based on opportunity size in %
 const REGIME = (opp: number): Trade['regime'] =>
   opp > 0.40 ? 'extreme' : opp > 0.20 ? 'high' : opp > 0.08 ? 'normal' : 'low';
-
-// Realistic per-trade execution success (front-running, latency, partial fills)
-const EXEC_RATE: Record<Config['strategy'], number> = {
-  conservative: 0.82,
-  balanced:     0.75,
-  aggressive:   0.68,
-  adaptive:     0.78,
-};
-
-function detectOpportunity(market: MarketData, allMarkets: MarketData[], cfg: Config): number | null {
-  // Use real bid/ask volatility from Binance as the base signal.
-  // When vol is high, opportunities are larger and more frequent — real market behaviour.
-  const baseVol = market.volatility > 0 ? market.volatility : 0.002; // %
-
-  // Opportunity frequency scales with volatility.
-  // BTC quiet (vol ~0.001%): ~3% chance per tick
-  // AR volatile (vol ~0.15%): ~30% chance per tick
-  const oppFreq = Math.min(0.45, baseVol * 3);
-  if (Math.random() > oppFreq) return null;
-
-  // Opportunity size: HFT arb (triangular, statistical) captures 1.5–10× base spread.
-  // Higher volatility = bigger dislocations.
-  // We also factor in whether multiple markets are moving together (corr breakdown).
-  const avgVol = allMarkets.reduce((s, m) => s + (m.volatility || 0), 0) / (allMarkets.length || 1);
-  const mktDisconnect = Math.max(1, baseVol / Math.max(avgVol, 0.001)); // this pair vs average
-  const sizeMult = 1.5 + Math.random() * 8.5 * mktDisconnect;           // 1.5–10× + dislocation bonus
-  const rawOpp = baseVol * sizeMult;
-
-  // Regime: derived from actual opportunity size, not a config knob
-  // (used for logging / display only)
-
-  const feeRoundTrip = (cfg.exchangeFee * 2); // in %
-  const minProfitable = feeRoundTrip * 1.5;   // need 1.5× fee as profit margin
-
-  if (rawOpp < Math.max(cfg.minSpread, minProfitable)) return null;
-
-  return rawOpp;
-}
 
 export function useSimulation(
   _stats: Stats,
   config: Config,
   marketData: MarketData[],
+  crossPairs: CrossPairMap,
   setStats: React.Dispatch<React.SetStateAction<Stats>>,
   setTrades: React.Dispatch<React.SetStateAction<Trade[]>>,
   setLogs: React.Dispatch<React.SetStateAction<string[]>>
 ) {
-  const simulationRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const simulationRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const [simulationState, setSimulationState] = useState<SimulationState>('idle');
-  const marketDataRef = useRef<MarketData[]>(marketData);
-  marketDataRef.current = marketData;
-  const configRef = useRef<Config>(config);
-  configRef.current = config;
+  const marketRef  = useRef<MarketData[]>(marketData);
+  const crossRef   = useRef<CrossPairMap>(crossPairs);
+  const configRef  = useRef<Config>(config);
+  marketRef.current  = marketData;
+  crossRef.current   = crossPairs;
+  configRef.current  = config;
 
-  const generateTrade = useCallback((currentStats: Stats, cfg: Config): Trade | null => {
-    const live = marketDataRef.current.filter(m => m.price > 0);
+  const generateTrade = useCallback((curr: Stats, cfg: Config): Trade | null => {
+    const live = marketRef.current.filter(m => m.price > 0);
     if (live.length === 0) return null;
 
-    const market = live[Math.floor(Math.random() * live.length)];
-    const opportunity = detectOpportunity(market, live, cfg);
-    if (!opportunity) return null;
+    const feeRoundTrip = cfg.exchangeFee * 2; // %
 
-    const feeRateTotal = (cfg.exchangeFee * 2) / 100;       // e.g. 0.0005
-    const tradeSize    = currentStats.capital * (cfg.tradeSizePercent / 100);
-    const fee          = tradeSize * feeRateTotal;
+    // --- Try real triangular arb first ---
+    let signal = calcTriangularArb(live, crossRef.current);
 
-    // Gross if fully captured; net = gross - fee
-    const grossProfit  = tradeSize * (opportunity / 100);
-    const netIfWin     = grossProfit - fee;
+    // Triangular arb must still clear fees + buffer to be worth it
+    if (signal && signal.opportunityPct < feeRoundTrip * 1.5) signal = null;
 
-    // Execution: some trades slip or get front-run
-    const execRate = EXEC_RATE[cfg.strategy];
-    const isWin    = Math.random() < execRate;
+    // --- Fallback: volatility-based model ---
+    if (!signal) {
+      const market = live[Math.floor(Math.random() * live.length)];
+      signal = detectVolatilityOpp(market, live, cfg);
+    }
 
-    // On a loss the bot still pays fees + small slippage
-    const netProfit = isWin ? netIfWin : -(fee * 1.2);
+    if (!signal) return null;
+
+    const { symbol, opportunityPct, path } = signal;
+    const tradeSize = curr.capital * (cfg.tradeSizePercent / 100);
+
+    // --- Slippage: reduces effective gross profit ---
+    const slip        = slippagePct(symbol, tradeSize);
+    const netOppPct   = opportunityPct - slip;   // real net opportunity after slippage
+    const feeRateDec  = feeRoundTrip / 100;
+    const fee         = tradeSize * feeRateDec;
+    const grossProfit = tradeSize * (opportunityPct / 100);
+    const netIfWin    = tradeSize * (netOppPct / 100) - fee;
+
+    // Skip if slippage + fee makes it unviable
+    if (netIfWin <= 0) return null;
+
+    // --- Competition-adjusted execution rate ---
+    const rate   = execRate(cfg.strategy, opportunityPct);
+    const isWin  = Math.random() < rate;
+    const netProfit = isWin ? netIfWin : -(fee + tradeSize * slip / 100);
 
     return {
-      id:           Math.random().toString(36).substr(2, 9),
-      timestamp:    Date.now(),
-      pair:         `${market.symbol}/USDT`,
-      regime:       REGIME(opportunity),
-      spread:       opportunity,
-      size:         tradeSize,
+      id:             Math.random().toString(36).substr(2, 9),
+      timestamp:      Date.now(),
+      pair:           path,
+      regime:         REGIME(opportunityPct),
+      spread:         opportunityPct,
+      size:           tradeSize,
       expectedProfit: netIfWin,
-      grossProfit:  isWin ? grossProfit : 0,
+      grossProfit:    isWin ? grossProfit : 0,
       fee,
-      actualProfit: netProfit,
+      actualProfit:   netProfit,
       netProfit,
-      status:       'completed',
+      status:         'completed',
     };
   }, []);
 
@@ -138,15 +235,16 @@ export function useSimulation(
 
         if (total % 10 === 0) {
           const roi = ((newCapital - curr.initialCapital) / curr.initialCapital * 100).toFixed(3);
+          const src = crossRef.current.size > 0 ? 'triangular+spread arb' : 'spread arb (no cross-pair data yet)';
           setLogs(prev => [
-            `[${new Date().toLocaleTimeString()}] ${total} trades | ROI: ${roi}% | Fees: $${(curr.totalFees + trade.fee).toFixed(6)}`,
+            `[${new Date().toLocaleTimeString()}] ${total} trades | ROI: ${roi}% | Fees: $${(curr.totalFees + trade.fee).toFixed(6)} | ${src}`,
             ...prev
           ].slice(0, 500));
         }
 
-        // Regime from actual live market volatility, not config
-        const avgVol = marketDataRef.current.reduce((s, m) => s + (m.volatility || 0), 0)
-          / (marketDataRef.current.length || 1);
+        // Regime from actual average live volatility
+        const mData = marketRef.current;
+        const avgVol = mData.reduce((s, m) => s + (m.volatility || 0), 0) / (mData.length || 1);
         const liveRegime: Trade['regime'] =
           avgVol > 0.10 ? 'extreme' : avgVol > 0.04 ? 'high' : avgVol > 0.01 ? 'normal' : 'low';
 
