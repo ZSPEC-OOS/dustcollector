@@ -17,8 +17,8 @@ const DEFAULT_CONFIG: Config = {
   initialCapital: 200,      // $200 — matches the swarm scenario
   apiKey: '',
   apiSecret: '',
-  exchangeFee: 0.025,       // maker fee with BNB — realistic for limit-order HFT
-  minSpread: 0.08,          // min opportunity; must exceed round-trip fee to profit
+  exchangeFee: 0.025,       // legacy field — used only in optimistic preset
+  minSpread: 0.08,          // min opportunity; must exceed total fee legs to profit
   tradeSizePercent: 80,     // used in single-bot mode only
   maxTradesPerHour: 360,    // headroom for swarm bursts (6 attacks/min × 60)
   cooldownSeconds: 15,      // 15s between swarm attacks — ~4 attacks/min max
@@ -30,6 +30,39 @@ const DEFAULT_CONFIG: Config = {
   swarmMode: true,
   swarmBotCount: 18,        // 18 bots — Binance $10 minimum × 18 = $180
   swarmBotSize: 10,         // $10/bot — Binance spot minimum notional
+  // Reality Check — default: optimistic (matches original sim behaviour)
+  realityPreset: 'optimistic',
+  orderType: 'market',
+  takerFee: 0.100,          // Binance default taker fee
+  makerFee: 0.025,          // Binance maker fee with BNB discount
+  infrastructureLatencyMs: 200,   // typical browser round-trip
+  competitionLevel: 'retail',     // 500+ bots on major pairs (used in realistic/custom)
+  opportunityLifetime: 'simulated', // sim default: gaps last seconds
+  opportunityFrequency: 'optimistic', // sim default: always a signal available
+};
+
+// Full presets applied when user picks Optimistic or Realistic
+const REALITY_PRESETS: Record<'optimistic' | 'realistic', Partial<Config>> = {
+  optimistic: {
+    realityPreset: 'optimistic',
+    orderType: 'market',
+    takerFee: 0.100,
+    makerFee: 0.025,
+    infrastructureLatencyMs: 200,
+    competitionLevel: 'retail',
+    opportunityLifetime: 'simulated',
+    opportunityFrequency: 'optimistic',
+  },
+  realistic: {
+    realityPreset: 'realistic',
+    orderType: 'market',
+    takerFee: 0.100,
+    makerFee: 0.020,
+    infrastructureLatencyMs: 200,   // browser → REST API
+    competitionLevel: 'retail',     // 500 bots on Binance major pairs
+    opportunityLifetime: 'realistic', // 10–50ms windows
+    opportunityFrequency: 'realistic', // ~2 genuine gaps/hr for retail
+  },
 };
 
 const makeInitialStats = (capital: number): Stats => ({
@@ -118,7 +151,12 @@ function App() {
   };
 
   const handleConfigUpdate = (newConfig: Partial<Config>) => {
-    const updated = { ...config, ...newConfig };
+    // When switching to a named preset, merge the full preset settings automatically
+    let merged = { ...newConfig };
+    if (newConfig.realityPreset === 'optimistic' || newConfig.realityPreset === 'realistic') {
+      merged = { ...REALITY_PRESETS[newConfig.realityPreset], ...newConfig };
+    }
+    const updated = { ...config, ...merged };
     setConfig(updated);
     updateConfig(updated);
     if (newConfig.initialCapital !== undefined) {
@@ -249,7 +287,12 @@ function App() {
               <div className="flex items-center gap-2 mb-4">
                 <Receipt className="w-4 h-4 text-slate-400" />
                 <h3 className="text-sm font-medium text-slate-400 uppercase tracking-wider">Profit Breakdown</h3>
-                <span className="ml-auto text-xs text-slate-500">{config.exchangeFee}% fee per side ({config.exchangeFee * 2}% round-trip)</span>
+                <span className="ml-auto text-xs text-slate-500">
+                {config.realityPreset === 'optimistic'
+                  ? `${config.exchangeFee}% × 2 legs = ${(config.exchangeFee * 2).toFixed(3)}% (optimistic)`
+                  : `${config.orderType === 'market' ? config.takerFee : config.makerFee}% × 3 legs = ${((config.orderType === 'market' ? config.takerFee : config.makerFee) * 3).toFixed(3)}% (realistic)`
+                }
+              </span>
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div className="bg-slate-800 rounded-lg p-3">
@@ -423,7 +466,7 @@ function App() {
 
         <footer className="mt-8 pt-4 border-t border-slate-800 text-center text-slate-600 text-sm">
           <p>Dust Collector v2.0 // {isReal ? 'LIVE MODE — real funds at risk' : 'Test Mode — no real funds'}</p>
-          <p className="mt-1">Live Binance data · {isReal ? 'Real execution' : 'Simulated execution'} · Fee: {config.exchangeFee}% per side</p>
+          <p className="mt-1">Live Binance data · {isReal ? 'Real execution' : 'Simulated execution'} · Reality: {config.realityPreset}</p>
         </footer>
       </div>
     </div>
